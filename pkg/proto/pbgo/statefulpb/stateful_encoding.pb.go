@@ -427,6 +427,7 @@ func (x *Tag) GetValue() *DynamicValue {
 type Log struct {
 	state     protoimpl.MessageState `protogen:"open.v1"`
 	Timestamp int64                  `protobuf:"zigzag64,1,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
+	Timestamp int64                  `protobuf:"zigzag64,1,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
 	// Types that are valid to be assigned to Content:
 	//
 	//	*Log_Structured
@@ -477,6 +478,7 @@ func (*Log) Descriptor() ([]byte, []int) {
 	return file_datadog_stateful_stateful_encoding_proto_rawDescGZIP(), []int{6}
 }
 
+func (x *Log) GetTimestamp() int64 {
 func (x *Log) GetTimestamp() int64 {
 	if x != nil {
 		return x.Timestamp
@@ -1211,6 +1213,7 @@ const file_datadog_stateful_stateful_encoding_proto_rawDesc = "" +
 	"\x05value\x18\x02 \x01(\v2%.datadog.intake.stateful.DynamicValueR\x05value\"\xc1\x01\n" +
 	"\x05value\x18\x02 \x01(\v2%.datadog.intake.stateful.DynamicValueR\x05value\"\xc1\x01\n" +
 	"\x03Log\x12\x1c\n" +
+	"\ttimestamp\x18\x01 \x01(\x12R\ttimestamp\x12H\n" +
 	"\ttimestamp\x18\x01 \x01(\x12R\ttimestamp\x12H\n" +
 	"\n" +
 	"structured\x18\x02 \x01(\v2&.datadog.intake.stateful.StructuredLogH\x00R\n" +
