@@ -231,6 +231,32 @@ func (t *localTagger) Tag(entityID types.EntityID, cardinality types.TagCardinal
 	return tags.Copy(), nil
 }
 
+// TagWithCompleteness returns tags for an entity along with a boolean indicating
+// whether the entity's tags are complete.
+func (t *localTagger) TagWithCompleteness(entityID types.EntityID, cardinality types.TagCardinality) ([]string, bool, error) {
+	// Read completeness before tags. These are two separate reads so they can
+	// race. By reading completeness first, the worst case is returning complete
+	// tags marked as incomplete (safe, callers can retry), rather than
+	// incomplete tags marked as complete (unsafe, caller will emit data with
+	// incomplete tags).
+	entity, err := t.tagStore.GetEntity(entityID)
+	if err != nil && !errors.Is(err, tagstore.ErrNotFound) {
+		return nil, false, err
+	}
+
+	tags, err := t.getTags(entityID, cardinality)
+	if err != nil && !errors.Is(err, tagstore.ErrNotFound) {
+		return nil, false, err
+	}
+
+	isComplete := false
+	if entity != nil {
+		isComplete = entity.IsComplete
+	}
+
+	return tags.Copy(), isComplete, nil
+}
+
 // GenerateContainerIDFromOriginInfo generates a container ID from Origin Info.
 // The resolutions will be done in the following order:
 // * OriginInfo.LocalData.ContainerID: If the container ID is already known, return it.

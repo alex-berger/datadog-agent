@@ -18,6 +18,12 @@ import (
 // Component is the component type.
 type Component interface {
 	Tag(entityID types.EntityID, cardinality types.TagCardinality) ([]string, error)
+	// TagWithCompleteness returns tags for an entity together with a boolean
+	// indicating whether the entity's data is complete. An entity is complete
+	// when all expected collectors have reported data for it. For containers in
+	// Kubernetes, completeness also considers the associated pod's
+	// completeness.
+	TagWithCompleteness(entityID types.EntityID, cardinality types.TagCardinality) ([]string, bool, error)
 	GenerateContainerIDFromOriginInfo(originInfo origindetection.OriginInfo) (string, error)
 	Standard(entityID types.EntityID) ([]string, error)
 	List() types.TaggerListResponse

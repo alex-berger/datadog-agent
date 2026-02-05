@@ -128,10 +128,11 @@ func (s *TagStore) ProcessTagInfo(tagInfos []*types.TagInfo) {
 		}
 
 		eventType := types.EventTypeModified
+		tagsChanged := true
 		if exist {
 			tags := storedTags.tagsForSource(info.Source)
 			if tags != nil && reflect.DeepEqual(tags, newSt) {
-				continue
+				tagsChanged = false
 			}
 		} else {
 			eventType = types.EventTypeAdded
@@ -139,10 +140,21 @@ func (s *TagStore) ProcessTagInfo(tagInfos []*types.TagInfo) {
 			s.store.Set(info.EntityID, storedTags)
 		}
 
+		completenessChanged := storedTags.getIsComplete() != info.IsComplete
+
+		// Skip if nothing changed
+		if !tagsChanged && !completenessChanged {
+			continue
+		}
+
 		if s.telemetryStore != nil {
 			s.telemetryStore.UpdatedEntities.Inc()
 		}
-		storedTags.setTagsForSource(info.Source, newSt)
+
+		if tagsChanged {
+			storedTags.setTagsForSource(info.Source, newSt)
+		}
+		storedTags.setIsComplete(info.IsComplete)
 
 		events = append(events, types.EntityEvent{
 			EventType: eventType,
