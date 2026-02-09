@@ -1725,10 +1725,16 @@ func (p *EBPFProbe) handleBeforeProcessContext(event *model.Event, data []byte, 
 		}
 
 		event.RecordCheckpoint("add_fork_entry_start")
+		// Set up trace to capture resolver internal checkpoints
+		p.Resolvers.ProcessResolver.SetActiveTrace(&event.ProcessingTrace, event.StartTime)
 		if err := p.Resolvers.ProcessResolver.AddForkEntry(event, cgroupContext, newEntryCb); err != nil {
+			// Clear the trace pointer from resolver
+			p.Resolvers.ProcessResolver.SetActiveTrace(nil, event.StartTime)
 			seclog.Errorf("failed to insert fork event: %s (pid %d, offset %d, len %d)", err, event.PIDContext.Pid, offset, len(data))
 			return false
 		}
+		// Clear the trace pointer from resolver
+		p.Resolvers.ProcessResolver.SetActiveTrace(nil, event.StartTime)
 		event.RecordCheckpoint("add_fork_entry_done")
 	case model.ExecEventType:
 		// unmarshal and fill event.processCacheEntry
@@ -1739,7 +1745,11 @@ func (p *EBPFProbe) handleBeforeProcessContext(event *model.Event, data []byte, 
 		}
 
 		event.RecordCheckpoint("add_exec_entry_start")
+		// Set up trace to capture resolver internal checkpoints
+		p.Resolvers.ProcessResolver.SetActiveTrace(&event.ProcessingTrace, event.StartTime)
 		err = p.Resolvers.ProcessResolver.AddExecEntry(event, cgroupContext)
+		// Clear the trace pointer from resolver
+		p.Resolvers.ProcessResolver.SetActiveTrace(nil, event.StartTime)
 		if err != nil {
 			seclog.Errorf("failed to insert exec event: %s (pid %d, offset %d, len %d)", err, event.PIDContext.Pid, offset, len(data))
 			return false

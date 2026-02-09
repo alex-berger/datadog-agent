@@ -66,6 +66,7 @@ func (m *Manager) LookupEventInProfiles(event *model.Event) {
 	event.FieldHandlers.ResolveContainerTags(event, &event.ProcessContext.Process.ContainerContext)
 	event.RecordCheckpoint("profile_resolve_tags_done")
 	if len(event.ProcessContext.Process.ContainerContext.Tags) > 0 {
+		event.RecordCheckpoint("container_profile_lookup_start")
 		tags = event.ProcessContext.Process.ContainerContext.Tags
 		selector, err := cgroupModel.NewWorkloadSelector(utils.GetTagValue("image_name", tags), "*")
 		if err == nil {
@@ -73,6 +74,7 @@ func (m *Manager) LookupEventInProfiles(event *model.Event) {
 			m.profilesLock.Lock()
 			profile = m.profiles[selector]
 			m.profilesLock.Unlock()
+			event.RecordCheckpoint("container_profile_lookup_done")
 			imageTag = utils.GetTagValue("image_tag", tags)
 			if imageTag == "" {
 				imageTag = "latest"
@@ -82,17 +84,21 @@ func (m *Manager) LookupEventInProfiles(event *model.Event) {
 
 	// If no profile found and there's a cgroup ID, try cgroup-based lookup
 	if profile == nil && event.ProcessContext.Process.CGroup.CGroupID != "" {
+		event.RecordCheckpoint("cgroup_tags_resolve_start")
 		tags, err := m.resolvers.TagsResolver.ResolveWithErr(event.ProcessContext.Process.CGroup.CGroupID)
+		event.RecordCheckpoint("cgroup_tags_resolve_done")
 		if err != nil {
 			seclog.Errorf("failed to resolve tags for cgroup %s: %v", event.ProcessContext.Process.CGroup.CGroupID, err)
 			return
 		}
+		event.RecordCheckpoint("cgroup_profile_lookup_start")
 		selector, err := cgroupModel.NewWorkloadSelector(utils.GetTagValue("service", tags), "*")
 		if err == nil {
 			// lookup profile
 			m.profilesLock.Lock()
 			profile = m.profiles[selector]
 			m.profilesLock.Unlock()
+			event.RecordCheckpoint("cgroup_profile_lookup_done")
 			imageTag = utils.GetTagValue("version", tags)
 			if imageTag == "" {
 				imageTag = "latest"
