@@ -15,6 +15,7 @@ import (
 
 	"github.com/DataDog/datadog-agent/pkg/util/log"
 	"go.opentelemetry.io/collector/confmap"
+	"go.opentelemetry.io/collector/confmap/xconfmap"
 )
 
 // converterWithAgent ensures sane configuration that satisfies the following conditions:
@@ -33,7 +34,7 @@ func newConverterWithAgent(_ confmap.ConverterSettings) confmap.Converter {
 
 // Convert implements the confmap.Converter interface for converterWithAgent.
 func (c *converterWithAgent) Convert(_ context.Context, conf *confmap.Conf) error {
-	confStringMap := conf.ToStringMap()
+	confStringMap := xconfmap.ToStringMapRaw(conf)
 
 	profilesPipeline, err := Ensure[confMap](confStringMap, "service::pipelines::profiles")
 	if err != nil {
