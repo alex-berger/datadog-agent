@@ -32,7 +32,7 @@ require (
 	go.opentelemetry.io/collector/exporter v1.50.0
 	go.opentelemetry.io/collector/exporter/exporterhelper v0.144.0
 	go.opentelemetry.io/collector/exporter/exportertest v0.144.0
-	go.opentelemetry.io/collector/featuregate v1.50.0
+	go.opentelemetry.io/collector/featuregate v1.51.0
 	go.opentelemetry.io/collector/pdata v1.50.0
 	go.opentelemetry.io/otel/metric v1.39.1-0.20260115134311-f809f7d71e2d
 	go.opentelemetry.io/otel/trace v1.39.1-0.20260115134311-f809f7d71e2d
@@ -172,7 +172,7 @@ require (
 	github.com/klauspost/compress v1.18.3 // indirect
 	github.com/knadh/koanf/maps v0.1.2 // indirect
 	github.com/knadh/koanf/providers/confmap v1.0.0 // indirect
-	github.com/knadh/koanf/v2 v2.3.0 // indirect
+	github.com/knadh/koanf/v2 v2.3.2 // indirect
 	github.com/lufia/plan9stats v0.0.0-20251013123823-9fd1530e3ec3 // indirect
 	github.com/magiconair/properties v1.8.10 // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect
@@ -222,7 +222,7 @@ require (
 	go.opentelemetry.io/collector/config/configmiddleware v1.50.0 // indirect
 	go.opentelemetry.io/collector/config/configopaque v1.50.0 // indirect
 	go.opentelemetry.io/collector/config/configtls v1.50.0 // indirect
-	go.opentelemetry.io/collector/confmap v1.50.0 // indirect
+	go.opentelemetry.io/collector/confmap v1.51.0 // indirect
 	go.opentelemetry.io/collector/confmap/xconfmap v0.144.0 // indirect
 	go.opentelemetry.io/collector/consumer/consumererror v0.144.0 // indirect
 	go.opentelemetry.io/collector/consumer/consumertest v0.144.0 // indirect
