@@ -90,6 +90,19 @@ func NewNetworkNamespaceWithPath(nsID uint32, nsPath *utils.NetNSPath) (*Network
 	return netns, nil
 }
 
+// NewNetworkNamespaceWithPathAndEvent is like NewNetworkNamespaceWithPath but adds checkpoints for performance debugging
+func NewNetworkNamespaceWithPathAndEvent(nsID uint32, nsPath *utils.NetNSPath, event *model.Event) (*NetworkNamespace, error) {
+	event.RecordCheckpoint("netns_new_namespace_start")
+	netns := NewNetworkNamespace(nsID)
+	event.RecordCheckpoint("netns_new_namespace_created")
+	if err := netns.openHandleWithEvent(nsPath, event); err != nil {
+		event.RecordCheckpoint("netns_new_namespace_openhandle_error")
+		return nil, err
+	}
+	event.RecordCheckpoint("netns_new_namespace_complete")
+	return netns, nil
+}
+
 // openHandle tries to create a network namespace handle with the provided thread ID
 func (nn *NetworkNamespace) openHandle(nsPath *utils.NetNSPath) error {
 	nn.Lock()
@@ -114,6 +127,43 @@ func (nn *NetworkNamespace) openHandle(nsPath *utils.NetNSPath) error {
 		return err
 	}
 	nn.handle = handle
+	return nil
+}
+
+// openHandleWithEvent is like openHandle but adds checkpoints for performance debugging
+func (nn *NetworkNamespace) openHandleWithEvent(nsPath *utils.NetNSPath, event *model.Event) error {
+	event.RecordCheckpoint("netns_openhandle_lock_start")
+	nn.Lock()
+	defer nn.Unlock()
+	event.RecordCheckpoint("netns_openhandle_lock_acquired")
+
+	// check that the handle matches the expected netns ID
+	event.RecordCheckpoint("netns_openhandle_get_procns_start")
+	threadNetnsID, err := nsPath.GetProcessNetworkNamespace()
+	event.RecordCheckpoint("netns_openhandle_get_procns_done")
+	if err != nil {
+		event.RecordCheckpoint("netns_openhandle_get_procns_error")
+		return err
+	}
+	if threadNetnsID != nn.nsID {
+		event.RecordCheckpoint("netns_openhandle_nsid_mismatch")
+		// The reason why this can happen is that a process can hold a socket in a different network namespace. This is
+		// the case for the Docker Embedded DNS server: a socket is created in the container namespace, but the thead
+		// holding the socket jumps back to the host network namespace. Unfortunately this code is racy: ideally we'd
+		// like to lock the network namespace of the thread in place until we fetch both the netns ID and the handle,
+		// but afaik that's not possible (without freezing the process or its cgroup ...).
+		return fmt.Errorf("the provided doesn't match the expected netns ID: got %d, expected %d", threadNetnsID, nn.nsID)
+	}
+
+	event.RecordCheckpoint("netns_openhandle_open_start")
+	handle, err := os.Open(nsPath.GetPath())
+	event.RecordCheckpoint("netns_openhandle_open_done")
+	if err != nil {
+		event.RecordCheckpoint("netns_openhandle_open_error")
+		return err
+	}
+	nn.handle = handle
+	event.RecordCheckpoint("netns_openhandle_complete")
 	return nil
 }
 
@@ -291,6 +341,83 @@ func (nr *Resolver) SaveNetworkNamespaceHandleLazy(nsID uint32, nsPathFunc func(
 	if nr.GetState() == sprocess.Snapshotting {
 		_ = nr.snapshotNetworkDevices(netns)
 	}
+	return netns, true
+}
+
+// SaveNetworkNamespaceHandleLazyWithEvent is like SaveNetworkNamespaceHandleLazy but adds granular checkpoints for performance debugging
+func (nr *Resolver) SaveNetworkNamespaceHandleLazyWithEvent(nsID uint32, nsPathFunc func() *utils.NetNSPath, event *model.Event) (*NetworkNamespace, bool) {
+	event.RecordCheckpoint("netns_check_enabled")
+	if !nr.config.NetworkEnabled || nsID == 0 || nsPathFunc == nil {
+		event.RecordCheckpoint("netns_disabled_or_invalid")
+		return nil, false
+	}
+
+	event.RecordCheckpoint("netns_lock_acquire_start")
+	nr.Lock()
+	defer nr.Unlock()
+	event.RecordCheckpoint("netns_lock_acquired")
+
+	netns, found := nr.networkNamespaces.Get(nsID)
+	event.RecordCheckpoint("netns_cache_lookup_done")
+
+	if !found {
+		event.RecordCheckpoint("netns_not_found_get_path_start")
+		nsPath := nsPathFunc()
+		event.RecordCheckpoint("netns_not_found_get_path_done")
+		if nsPath == nil {
+			event.RecordCheckpoint("netns_path_nil")
+			return nil, false
+		}
+
+		event.RecordCheckpoint("netns_create_with_path_start")
+		var err error
+		netns, err = NewNetworkNamespaceWithPathAndEvent(nsID, nsPath, event)
+		event.RecordCheckpoint("netns_create_with_path_done")
+		if err != nil {
+			event.RecordCheckpoint("netns_create_error")
+			// we'll get this namespace another time, ignore
+			return nil, false
+		}
+		nr.networkNamespaces.Add(nsID, netns)
+		event.RecordCheckpoint("netns_added_to_cache")
+	} else {
+		event.RecordCheckpoint("netns_found_check_handle")
+		if netns.hasValidHandle() {
+			event.RecordCheckpoint("netns_has_valid_handle")
+			// we already have a handle for this network namespace, ignore
+			return netns, false
+		}
+
+		event.RecordCheckpoint("netns_found_no_handle_get_path_start")
+		nsPath := nsPathFunc()
+		event.RecordCheckpoint("netns_found_no_handle_get_path_done")
+		if nsPath == nil {
+			event.RecordCheckpoint("netns_path_nil")
+			return nil, false
+		}
+
+		event.RecordCheckpoint("netns_open_handle_start")
+		if err := netns.openHandleWithEvent(nsPath, event); err != nil {
+			event.RecordCheckpoint("netns_open_handle_error")
+			// we'll get this namespace another time, ignore
+			return nil, false
+		}
+		event.RecordCheckpoint("netns_open_handle_done")
+	}
+
+	// dequeue devices
+	event.RecordCheckpoint("netns_dequeue_devices_start")
+	netns.dequeueNetworkDevices(nr.tcResolver, nr.manager)
+	event.RecordCheckpoint("netns_dequeue_devices_done")
+
+	// if the snapshot process is still going on, we need to snapshot the namespace now, otherwise we'll miss it
+	if nr.GetState() == sprocess.Snapshotting {
+		event.RecordCheckpoint("netns_snapshot_start")
+		_ = nr.snapshotNetworkDevices(netns)
+		event.RecordCheckpoint("netns_snapshot_done")
+	}
+
+	event.RecordCheckpoint("netns_complete")
 	return netns, true
 }
 

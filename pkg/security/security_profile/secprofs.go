@@ -68,12 +68,20 @@ func (m *Manager) LookupEventInProfiles(event *model.Event) {
 	if len(event.ProcessContext.Process.ContainerContext.Tags) > 0 {
 		event.RecordCheckpoint("container_profile_lookup_start")
 		tags = event.ProcessContext.Process.ContainerContext.Tags
-		selector, err := cgroupModel.NewWorkloadSelector(utils.GetTagValue("image_name", tags), "*")
+		event.RecordCheckpoint("container_get_image_name_start")
+		imageName := utils.GetTagValue("image_name", tags)
+		event.RecordCheckpoint("container_get_image_name_done")
+		event.RecordCheckpoint("container_new_selector_start")
+		selector, err := cgroupModel.NewWorkloadSelector(imageName, "*")
+		event.RecordCheckpoint("container_new_selector_done")
 		if err == nil {
 			// lookup profile
+			event.RecordCheckpoint("container_profile_lock_start")
 			m.profilesLock.Lock()
+			event.RecordCheckpoint("container_profile_lock_acquired")
 			profile = m.profiles[selector]
 			m.profilesLock.Unlock()
+			event.RecordCheckpoint("container_profile_lock_released")
 			event.RecordCheckpoint("container_profile_lookup_done")
 			imageTag = utils.GetTagValue("image_tag", tags)
 			if imageTag == "" {
@@ -88,21 +96,37 @@ func (m *Manager) LookupEventInProfiles(event *model.Event) {
 		tags, err := m.resolvers.TagsResolver.ResolveWithErr(event.ProcessContext.Process.CGroup.CGroupID)
 		event.RecordCheckpoint("cgroup_tags_resolve_done")
 		if err != nil {
+			event.RecordCheckpoint("cgroup_tags_resolve_error")
 			seclog.Errorf("failed to resolve tags for cgroup %s: %v", event.ProcessContext.Process.CGroup.CGroupID, err)
 			return
 		}
 		event.RecordCheckpoint("cgroup_profile_lookup_start")
-		selector, err := cgroupModel.NewWorkloadSelector(utils.GetTagValue("service", tags), "*")
+		event.RecordCheckpoint("cgroup_get_service_tag_start")
+		serviceTag := utils.GetTagValue("service", tags)
+		event.RecordCheckpoint("cgroup_get_service_tag_done")
+		event.RecordCheckpoint("cgroup_new_selector_start")
+		selector, err := cgroupModel.NewWorkloadSelector(serviceTag, "*")
+		event.RecordCheckpoint("cgroup_new_selector_done")
 		if err == nil {
 			// lookup profile
+			event.RecordCheckpoint("cgroup_profile_lock_start")
 			m.profilesLock.Lock()
+			event.RecordCheckpoint("cgroup_profile_lock_acquired")
 			profile = m.profiles[selector]
+			profileCount := len(m.profiles)
 			m.profilesLock.Unlock()
+			event.RecordCheckpoint("cgroup_profile_lock_released")
 			event.RecordCheckpoint("cgroup_profile_lookup_done")
+			// Log for analysis if we have many profiles
+			if profileCount > 100 {
+				seclog.Debugf("profile_lookup: profile_count=%d selector=%v found=%v", profileCount, selector, profile != nil)
+			}
 			imageTag = utils.GetTagValue("version", tags)
 			if imageTag == "" {
 				imageTag = "latest"
 			}
+		} else {
+			event.RecordCheckpoint("cgroup_new_selector_error")
 		}
 	}
 	if profile == nil {

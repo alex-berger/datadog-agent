@@ -1030,7 +1030,9 @@ func eventWithNoProcessContext(eventType model.EventType) bool {
 func (p *EBPFProbe) unmarshalProcessCacheEntry(ev *model.Event, data []byte) (int, error) {
 	var sc model.SyscallContext
 
+	ev.RecordCheckpoint("unmarshal_syscall_ctx_start")
 	n, err := sc.UnmarshalBinary(data)
+	ev.RecordCheckpoint("unmarshal_syscall_ctx_done")
 	if err != nil {
 		return n, err
 	}
@@ -1040,10 +1042,14 @@ func (p *EBPFProbe) unmarshalProcessCacheEntry(ev *model.Event, data []byte) (in
 		ev.Exec.SyscallContext.ID = sc.ID
 	}
 
+	ev.RecordCheckpoint("new_process_cache_entry_start")
 	entry := p.Resolvers.ProcessResolver.NewProcessCacheEntry(ev.PIDContext)
 	ev.ProcessCacheEntry = entry
+	ev.RecordCheckpoint("new_process_cache_entry_done")
 
+	ev.RecordCheckpoint("unmarshal_process_start")
 	n, err = entry.Process.UnmarshalBinary(data[n:])
+	ev.RecordCheckpoint("unmarshal_process_done")
 	if err != nil {
 		return n, err
 	}
@@ -1092,7 +1098,7 @@ func (p *EBPFProbe) setProcessContext(eventType model.EventType, event *model.Ev
 
 	// flush exited process
 	event.RecordCheckpoint("dequeue_exited_start")
-	p.Resolvers.ProcessResolver.DequeueExited()
+	p.Resolvers.ProcessResolver.DequeueExitedWithEvent(event)
 	event.RecordCheckpoint("dequeue_exited_done")
 
 	return true
@@ -1225,11 +1231,14 @@ func (p *EBPFProbe) handleEvent(CPU int, data []byte) model.EventType {
 	event.RecordCheckpoint("unmarshal_contexts")
 
 	// save netns handle if applicable
-	_, _ = p.Resolvers.NamespaceResolver.SaveNetworkNamespaceHandleLazy(event.PIDContext.NetNS, func() *utils.NetNSPath {
+	event.RecordCheckpoint("save_netns_start")
+	_, _ = p.Resolvers.NamespaceResolver.SaveNetworkNamespaceHandleLazyWithEvent(event.PIDContext.NetNS, func() *utils.NetNSPath {
 		return utils.NetNSPathFromPid(event.PIDContext.Pid)
-	})
+	}, event)
+	event.RecordCheckpoint("save_netns_done")
 
 	// handle exec and fork before process context resolution as they modify the process context resolution
+	event.RecordCheckpoint("handle_before_process_ctx_start")
 	if !p.handleBeforeProcessContext(event, data, offset, dataLen, cgroupContext, newEntryCb) {
 		return eventType
 	}

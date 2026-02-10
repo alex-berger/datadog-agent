@@ -162,6 +162,54 @@ func (p *EBPFResolver) DequeueExited() {
 	p.exitedQueue = p.exitedQueue[0:0]
 }
 
+// DequeueExitedWithEvent is like DequeueExited but adds granular checkpoints for performance debugging
+func (p *EBPFResolver) DequeueExitedWithEvent(event *model.Event) {
+	event.RecordCheckpoint("dequeue_lock_start")
+	p.Lock()
+	defer p.Unlock()
+	event.RecordCheckpoint("dequeue_lock_acquired")
+
+	event.RecordCheckpoint("dequeue_setup_start")
+	delEntry := func(pid uint32, exitTime time.Time) {
+		p.deleteEntry(pid, exitTime)
+		p.flushedEntries.Inc()
+	}
+
+	now := time.Now()
+	queueSize := len(p.exitedQueue)
+	event.RecordCheckpoint("dequeue_setup_done")
+
+	event.RecordCheckpoint("dequeue_iteration_start")
+	deletedCount := 0
+	for _, pid := range p.exitedQueue {
+		entry := p.entryCache[pid]
+		if entry == nil {
+			continue
+		}
+
+		if tm := entry.ExecTime; !tm.IsZero() && tm.Add(time.Minute).Before(now) {
+			delEntry(pid, now)
+			deletedCount++
+		} else if tm := entry.ForkTime; !tm.IsZero() && tm.Add(time.Minute).Before(now) {
+			delEntry(pid, now)
+			deletedCount++
+		} else if entry.ForkTime.IsZero() && entry.ExecTime.IsZero() {
+			delEntry(pid, now)
+			deletedCount++
+		}
+	}
+	event.RecordCheckpoint("dequeue_iteration_done")
+
+	event.RecordCheckpoint("dequeue_clear_queue_start")
+	p.exitedQueue = p.exitedQueue[0:0]
+	event.RecordCheckpoint("dequeue_clear_queue_done")
+
+	// Log queue size and deletion count for analysis
+	if queueSize > 100 || deletedCount > 50 {
+		seclog.Debugf("dequeue_stats: queue_size=%d deleted=%d", queueSize, deletedCount)
+	}
+}
+
 // NewProcessCacheEntry returns a new process cache entry
 func (p *EBPFResolver) NewProcessCacheEntry(pidContext model.PIDContext) *model.ProcessCacheEntry {
 	entry := model.NewProcessCacheEntry()
