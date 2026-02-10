@@ -15,30 +15,20 @@ import (
 	"github.com/DataDog/datadog-agent/pkg/config/servicenaming/engine"
 )
 
-// AgentServiceDiscoveryConfig is the global agent-level service discovery configuration.
-// This feature is opt-in: it only activates when Enabled is true and ServiceDefinitions are present.
+// AgentServiceDiscoveryConfig holds the configuration for CEL-based service discovery in the agent.
 type AgentServiceDiscoveryConfig struct {
-	// Enabled controls whether CEL-based service discovery is active.
-	// When false (default), the agent uses legacy service name detection.
 	Enabled bool `yaml:"enabled"`
 
-	// ServiceDefinitions are the CEL rules evaluated in order (first match wins).
 	ServiceDefinitions []ServiceDefinition `yaml:"service_definitions"`
 }
 
 // ServiceDefinition represents a query/value pair for service name evaluation.
-// Rules are evaluated in order; the first matching rule wins.
 type ServiceDefinition struct {
-	// Name is an optional identifier for debugging and logging.
-	// If empty, the rule index will be used in logs/metrics.
+	// Name is an optional identifier
 	Name string `yaml:"name,omitempty"`
 
-	// Query is a CEL boolean expression that determines if this rule matches.
-	// Example: "container['labels']['app'] == 'redis'"
 	Query string `yaml:"query"`
 
-	// Value is a CEL string expression that computes the service name when Query matches.
-	// Example: "container['labels']['service']"
 	Value string `yaml:"value"`
 }
 
@@ -49,15 +39,12 @@ type configReader interface {
 	Get(key string) interface{}
 }
 
-// LoadFromAgentConfig loads service discovery configuration from the agent's config model.
-// This is the preferred way to load configuration as it integrates with the agent's
-// config system (supports env vars like DD_SERVICE_DISCOVERY_ENABLED, remote config, etc.)
+// LoadFromAgentConfig loads the service discovery configuration from the given config reader.
 func LoadFromAgentConfig(cfg pkgconfigmodel.Reader) (*AgentServiceDiscoveryConfig, error) {
 	return loadFromReader(cfg)
 }
 
-// loadFromReader is the internal implementation that works with the minimal configReader interface.
-// It extracts service discovery configuration from the config reader and validates it if enabled.
+// loadFromReader is the internal implementation of configuration loading.
 func loadFromReader(cfg configReader) (*AgentServiceDiscoveryConfig, error) {
 	config := &AgentServiceDiscoveryConfig{
 		Enabled: cfg.GetBool("service_discovery.enabled"),
@@ -74,8 +61,7 @@ func loadFromReader(cfg configReader) (*AgentServiceDiscoveryConfig, error) {
 		config.ServiceDefinitions = defs
 	}
 
-	// Skip validation when disabled to avoid blocking agent startup
-	// with syntax errors in unused configuration
+	// If not enabled, we can skip validation (allows partial/invalid config when disabled)
 	if !config.Enabled {
 		return config, nil
 	}
@@ -87,13 +73,7 @@ func loadFromReader(cfg configReader) (*AgentServiceDiscoveryConfig, error) {
 	return config, nil
 }
 
-// parseServiceDefinitions converts the raw config value to typed ServiceDefinition slice.
-// Handles various slice types that config sources may produce:
-//   - []interface{} (common from YAML unmarshaling)
-//   - []map[string]interface{} (common from programmatic sources)
-//   - []map[interface{}]interface{} (can occur with some YAML parsers)
-//
-// Returns an error if the structure is invalid or required fields are missing.
+// parseServiceDefinitions parses the raw service definitions from the config into structured ServiceDefinition objects.
 func parseServiceDefinitions(raw interface{}) ([]ServiceDefinition, error) {
 	// Normalize different slice types to []interface{}
 	slice, err := normalizeSlice(raw)
@@ -111,7 +91,6 @@ func parseServiceDefinitions(raw interface{}) ([]ServiceDefinition, error) {
 
 		def := ServiceDefinition{}
 
-		// Name is optional
 		if name, ok := m["name"].(string); ok {
 			def.Name = name
 		}
@@ -150,9 +129,7 @@ func parseServiceDefinitions(raw interface{}) ([]ServiceDefinition, error) {
 	return defs, nil
 }
 
-// normalizeSlice converts various slice types to []interface{}.
-// Different config sources (YAML, programmatic, Viper) produce different slice types
-// that need normalization before parsing service definitions.
+// normalizeSlice converts various slice types to []interface{} for uniform processing.
 func normalizeSlice(raw interface{}) ([]interface{}, error) {
 	switch s := raw.(type) {
 	case []interface{}:
@@ -174,8 +151,7 @@ func normalizeSlice(raw interface{}) ([]interface{}, error) {
 	}
 }
 
-// toStringMap converts map types to map[string]interface{}.
-// YAML parsers may produce map[interface{}]interface{} which needs normalization.
+// toStringMap converts a map with arbitrary key types to a map[string]interface{}.
 func toStringMap(v interface{}) (map[string]interface{}, error) {
 	switch m := v.(type) {
 	case map[string]interface{}:
@@ -195,13 +171,13 @@ func toStringMap(v interface{}) (map[string]interface{}, error) {
 	}
 }
 
-// IsActive returns true if CEL-based service discovery should be used.
-// Requires both Enabled=true and at least one service definition.
+// IsActive returns if service discovery is enabled and has at least one rule defined.
 func (c *AgentServiceDiscoveryConfig) IsActive() bool {
 	return c.Enabled && len(c.ServiceDefinitions) > 0
 }
 
-// Validate checks the agent configuration for errors
+// Validate checks that all service definitions have valid CEL expressions.
+// Empty query/value fields and CEL compilation errors are reported.
 func (c *AgentServiceDiscoveryConfig) Validate() error {
 	if len(c.ServiceDefinitions) == 0 {
 		return nil // Empty config is valid (disabled)
@@ -235,7 +211,6 @@ func createCELEnvironmentForValidation() (*cel.Env, error) {
 }
 
 // validateCELBooleanExpression validates that an expression compiles and returns boolean.
-// It accepts both BoolType and DynType (runtime validation ensures actual boolean value).
 func validateCELBooleanExpression(expr string) error {
 	env, err := createCELEnvironmentForValidation()
 	if err != nil {
@@ -257,7 +232,6 @@ func validateCELBooleanExpression(expr string) error {
 }
 
 // validateCELStringExpression validates that an expression compiles and returns string.
-// It accepts both StringType and DynType (runtime validation ensures actual string value).
 func validateCELStringExpression(expr string) error {
 	env, err := createCELEnvironmentForValidation()
 	if err != nil {
@@ -278,9 +252,7 @@ func validateCELStringExpression(expr string) error {
 	return nil
 }
 
-// CompileEngine creates a CEL engine from the agent configuration.
-// Returns nil (not an error) if the configuration is not active (disabled or no rules).
-// This allows callers to check: if engine != nil { use it } else { use legacy detection }
+// CompileEngine compiles the service definitions into an executable engine.Engine instance.
 func (c *AgentServiceDiscoveryConfig) CompileEngine() (*engine.Engine, error) {
 	if !c.IsActive() {
 		return nil, nil

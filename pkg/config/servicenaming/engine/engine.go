@@ -7,7 +7,6 @@
 package engine
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"strconv"
@@ -21,7 +20,6 @@ import (
 )
 
 const (
-	evalTimeout       = 100 * time.Millisecond
 	maxServiceNameLen = 100
 )
 
@@ -119,7 +117,7 @@ func NewEngine(rules []Rule) (*Engine, error) {
 }
 
 // Evaluate runs the CEL rules against the input and returns the first matching service discovery result.
-func (e *Engine) Evaluate(ctx context.Context, input CELInput) *ServiceDiscoveryResult {
+func (e *Engine) Evaluate(input CELInput) *ServiceDiscoveryResult {
 	if len(e.rules) == 0 {
 		return nil
 	}
@@ -127,8 +125,7 @@ func (e *Engine) Evaluate(ctx context.Context, input CELInput) *ServiceDiscovery
 	vars := map[string]any{"container": input.Container}
 
 	for _, rule := range e.rules {
-		// Evaluate each rule with its own timeout context to ensure fair budget distribution
-		result := e.evaluateRule(ctx, rule, vars)
+		result := e.evaluateRule(rule, vars)
 		if result != nil {
 			return result
 		}
@@ -138,22 +135,8 @@ func (e *Engine) Evaluate(ctx context.Context, input CELInput) *ServiceDiscovery
 }
 
 // evaluateRule evaluates a single CEL rule and returns the service discovery result if it matches, or nil otherwise.
-func (e *Engine) evaluateRule(ctx context.Context, rule compiledRule, vars map[string]any) *ServiceDiscoveryResult {
+func (e *Engine) evaluateRule(rule compiledRule, vars map[string]any) *ServiceDiscoveryResult {
 	ruleID := getRuleID(rule)
-
-	// Create per-rule timeout context to ensure each rule gets the full timeout budget.
-	// This prevents later rules from being starved if earlier rules take time to evaluate.
-	evalCtx, cancel := context.WithTimeout(ctx, evalTimeout)
-	defer cancel()
-
-	select {
-	case <-evalCtx.Done():
-		if e.logLimiter.ShouldLog() {
-			log.Warnf("servicenaming: evaluation timeout or cancelled: %v", evalCtx.Err())
-		}
-		return nil
-	default:
-	}
 
 	queryResult, _, err := rule.queryProgram.Eval(vars)
 	if err != nil {

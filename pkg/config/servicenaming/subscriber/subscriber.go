@@ -44,7 +44,6 @@ const (
 // Subscriber listens to workloadmeta container events and applies CEL-based
 // service naming rules, storing results back into workloadmeta.
 type Subscriber struct {
-	cfg    pkgconfigmodel.Reader
 	wmeta  workloadmeta.Component
 	ch     chan workloadmeta.EventBundle
 	engine *engine.Engine
@@ -81,7 +80,6 @@ func NewSubscriber(cfg pkgconfigmodel.Reader, wmeta workloadmeta.Component) (*Su
 	log.Infof("CEL service naming enabled with %d rules", len(sdConfig.ServiceDefinitions))
 
 	sub := &Subscriber{
-		cfg:              cfg,
 		wmeta:            wmeta,
 		engine:           eng,
 		serviceNameCache: make(map[string]string),
@@ -155,7 +153,7 @@ func (s *Subscriber) removeFromCache(containerID string) {
 }
 
 // processContainer evaluates CEL rules and updates workloadmeta with the result.
-func (s *Subscriber) processContainer(ctx context.Context, container *workloadmeta.Container) {
+func (s *Subscriber) processContainer(_ context.Context, container *workloadmeta.Container) {
 	currentInputHash := hashContainerInput(container)
 
 	// Skip re-evaluation if input and output unchanged (idempotency check)
@@ -185,7 +183,7 @@ func (s *Subscriber) processContainer(ctx context.Context, container *workloadme
 		return
 	}
 
-	result := s.engine.Evaluate(ctx, engineInput)
+	result := s.engine.Evaluate(engineInput)
 
 	if result == nil {
 		log.Debugf("CEL service naming: no rule matched for container %s (name=%s, image=%s, labels=%d)",
