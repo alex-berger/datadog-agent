@@ -698,7 +698,7 @@ func startPrivateActionRunner(
 	}
 	err := le.EnsureLeaderElectionRuns()
 	if err != nil {
-		return nil, err
+		log.Warnf("Leader election failed: %v", err)
 	}
 	app, err := privateactionrunner.NewPrivateActionRunner(ctx, config, hostnameGetter, rcClient, log, tagger)
 	if err != nil {
