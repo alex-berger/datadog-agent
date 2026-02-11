@@ -79,35 +79,6 @@ func TestAgentConfig_Validate_EmptyFields(t *testing.T) {
 	}
 }
 
-// TestAgentConfig_Validate_InvalidQueries tests validation rejects invalid queries
-func TestAgentConfig_Validate_InvalidQueries(t *testing.T) {
-	tests := []struct {
-		name        string
-		query       string
-		expectedErr string
-	}{
-		// Note: "container['name']" compiles to DynType and is accepted (runtime validation will ensure it's bool)
-		{
-			name:        "invalid CEL syntax",
-			query:       "invalid syntax {{{",
-			expectedErr: "compilation error",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			config := &AgentServiceDiscoveryConfig{
-				ServiceDefinitions: []ServiceDefinition{
-					{Query: tt.query, Value: "container['name']"},
-				},
-			}
-			err := config.Validate()
-			require.Error(t, err)
-			assert.Contains(t, err.Error(), tt.expectedErr)
-		})
-	}
-}
-
 // TestAgentConfig_Validate_ValidExpressions tests query and value expressions compile
 func TestAgentConfig_Validate_ValidExpressions(t *testing.T) {
 	tests := []struct {
@@ -269,41 +240,22 @@ func TestLoadFromReader_Disabled(t *testing.T) {
 	assert.False(t, config.IsActive())
 }
 
-// TestLoadFromReader_InvalidQuery tests validation of invalid CEL queries
-func TestLoadFromReader_InvalidQuery(t *testing.T) {
-	cfg := &mockConfigReader{
-		values: map[string]interface{}{
-			"service_discovery.enabled": true,
-			"service_discovery.service_definitions": []interface{}{
-				map[interface{}]interface{}{
-					"query": "invalid syntax {{{",
-					"value": "'test'",
-				},
-			},
-		},
-	}
-
-	_, err := loadFromReader(cfg)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "compilation error")
-}
-
-// TestLoadFromReader_DisabledSkipsValidation tests that validation is skipped when disabled.
-// This ensures invalid rules in disabled config don't block agent startup.
+// TestLoadFromReader_DisabledSkipsValidation tests that config loading succeeds when disabled.
+// This ensures invalid CEL syntax in disabled config doesn't block agent startup.
 func TestLoadFromReader_DisabledSkipsValidation(t *testing.T) {
 	cfg := &mockConfigReader{
 		values: map[string]interface{}{
 			"service_discovery.enabled": false,
 			"service_discovery.service_definitions": []interface{}{
 				map[interface{}]interface{}{
-					"query": "invalid syntax {{{", // This would fail validation if enabled
+					"query": "invalid syntax {{{", // This would fail engine compilation if enabled
 					"value": "'test'",
 				},
 			},
 		},
 	}
 
-	// Should succeed because validation is skipped when disabled
+	// Should succeed because Validate() is skipped when disabled
 	config, err := loadFromReader(cfg)
 	require.NoError(t, err)
 	assert.False(t, config.Enabled)

@@ -9,8 +9,6 @@ package servicenaming
 import (
 	"fmt"
 
-	"github.com/google/cel-go/cel"
-
 	pkgconfigmodel "github.com/DataDog/datadog-agent/pkg/config/model"
 	"github.com/DataDog/datadog-agent/pkg/config/servicenaming/engine"
 )
@@ -138,8 +136,8 @@ func (c *AgentServiceDiscoveryConfig) IsActive() bool {
 	return c.Enabled && len(c.ServiceDefinitions) > 0
 }
 
-// Validate checks that all service definitions have valid CEL expressions.
-// Empty query/value fields and CEL compilation errors are reported.
+// Validate checks that all service definitions have non-empty query/value fields.
+// CEL compilation validation is deferred to engine.NewEngine() to avoid redundancy.
 func (c *AgentServiceDiscoveryConfig) Validate() error {
 	if len(c.ServiceDefinitions) == 0 {
 		return nil // Empty config is valid (disabled)
@@ -152,63 +150,6 @@ func (c *AgentServiceDiscoveryConfig) Validate() error {
 		if def.Value == "" {
 			return fmt.Errorf("service_definition[%d]: value cannot be empty", i)
 		}
-
-		// Validate query compiles as boolean
-		if err := validateCELBooleanExpression(def.Query); err != nil {
-			return fmt.Errorf("service_definition[%d]: invalid query: %w", i, err)
-		}
-
-		// Validate value compiles as string
-		if err := validateCELStringExpression(def.Value); err != nil {
-			return fmt.Errorf("service_definition[%d]: invalid value: %w", i, err)
-		}
-	}
-
-	return nil
-}
-
-// createCELEnvironmentForValidation creates a CEL environment for validation.
-func createCELEnvironmentForValidation() (*cel.Env, error) {
-	return engine.CreateCELEnvironment()
-}
-
-// validateCELBooleanExpression validates that an expression compiles and returns boolean.
-func validateCELBooleanExpression(expr string) error {
-	env, err := createCELEnvironmentForValidation()
-	if err != nil {
-		return err
-	}
-
-	ast, issues := env.Compile(expr)
-	if issues != nil && issues.Err() != nil {
-		return fmt.Errorf("compilation error: %w", issues.Err())
-	}
-
-	// Accept BoolType or DynType (runtime validation will ensure it's actually bool)
-	outType := ast.OutputType()
-	if outType != cel.BoolType && outType != cel.DynType {
-		return fmt.Errorf("expression must return boolean, got %v", outType)
-	}
-
-	return nil
-}
-
-// validateCELStringExpression validates that an expression compiles and returns string.
-func validateCELStringExpression(expr string) error {
-	env, err := createCELEnvironmentForValidation()
-	if err != nil {
-		return err
-	}
-
-	ast, issues := env.Compile(expr)
-	if issues != nil && issues.Err() != nil {
-		return fmt.Errorf("compilation error: %w", issues.Err())
-	}
-
-	// Accept StringType or DynType (runtime validation will ensure it's actually string)
-	outType := ast.OutputType()
-	if outType != cel.StringType && outType != cel.DynType {
-		return fmt.Errorf("expression must return string, got %v", outType)
 	}
 
 	return nil
