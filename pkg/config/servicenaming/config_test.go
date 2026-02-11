@@ -232,12 +232,12 @@ func TestLoadFromReader(t *testing.T) {
 		values: map[string]interface{}{
 			"service_discovery.enabled": true,
 			"service_discovery.service_definitions": []interface{}{
-				map[string]interface{}{
+				map[interface{}]interface{}{
 					"name":  "redis-rule",
 					"query": "container['labels']['app'] == 'redis'",
 					"value": "container['labels']['service']",
 				},
-				map[string]interface{}{
+				map[interface{}]interface{}{
 					"query": "true",
 					"value": "container['name']",
 				},
@@ -275,7 +275,7 @@ func TestLoadFromReader_InvalidQuery(t *testing.T) {
 		values: map[string]interface{}{
 			"service_discovery.enabled": true,
 			"service_discovery.service_definitions": []interface{}{
-				map[string]interface{}{
+				map[interface{}]interface{}{
 					"query": "invalid syntax {{{",
 					"value": "'test'",
 				},
@@ -295,7 +295,7 @@ func TestLoadFromReader_DisabledSkipsValidation(t *testing.T) {
 		values: map[string]interface{}{
 			"service_discovery.enabled": false,
 			"service_discovery.service_definitions": []interface{}{
-				map[string]interface{}{
+				map[interface{}]interface{}{
 					"query": "invalid syntax {{{", // This would fail validation if enabled
 					"value": "'test'",
 				},
@@ -308,56 +308,4 @@ func TestLoadFromReader_DisabledSkipsValidation(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, config.Enabled)
 	assert.Len(t, config.ServiceDefinitions, 1)
-}
-
-// TestLoadFromReader_SliceInputTypes tests handling of different slice input types
-func TestLoadFromReader_SliceInputTypes(t *testing.T) {
-	tests := []struct {
-		name               string
-		serviceDefinitions interface{}
-		expectedName       string
-		description        string
-	}{
-		{
-			name: "map[string]interface{}",
-			serviceDefinitions: []map[string]interface{}{
-				{
-					"name":  "rule1",
-					"query": "true",
-					"value": "'service1'",
-				},
-			},
-			expectedName: "rule1",
-			description:  "Some config sources return []map[string]interface{}",
-		},
-		{
-			name: "map[interface{}]interface{}",
-			serviceDefinitions: []map[interface{}]interface{}{
-				{
-					"name":  "rule2",
-					"query": "true",
-					"value": "'service2'",
-				},
-			},
-			expectedName: "rule2",
-			description:  "YAML parsers can produce []map[interface{}]interface{}",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			cfg := &mockConfigReader{
-				values: map[string]interface{}{
-					"service_discovery.enabled":             true,
-					"service_discovery.service_definitions": tt.serviceDefinitions,
-				},
-			}
-
-			config, err := loadFromReader(cfg)
-			require.NoError(t, err, tt.description)
-			assert.True(t, config.Enabled)
-			assert.Len(t, config.ServiceDefinitions, 1)
-			assert.Equal(t, tt.expectedName, config.ServiceDefinitions[0].Name)
-		})
-	}
 }

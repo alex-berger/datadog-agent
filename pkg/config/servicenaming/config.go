@@ -73,26 +73,30 @@ func loadFromReader(cfg configReader) (*AgentServiceDiscoveryConfig, error) {
 	return config, nil
 }
 
-// parseServiceDefinitions parses the raw service definitions from the config into structured ServiceDefinition objects.
+// parseServiceDefinitions parses the raw service definitions from datadog.yaml into structured ServiceDefinition objects.
+// This function expects the YAML parser format: []interface{} containing map[interface{}]interface{} items.
 func parseServiceDefinitions(raw interface{}) ([]ServiceDefinition, error) {
-	// Normalize different slice types to []interface{}
-	slice, err := normalizeSlice(raw)
-	if err != nil {
-		return nil, err
+	// YAML parser produces []interface{}
+	slice, ok := raw.([]interface{})
+	if !ok {
+		return nil, fmt.Errorf("expected array, got %T", raw)
 	}
 
 	defs := make([]ServiceDefinition, 0, len(slice))
 	for i, item := range slice {
-		// Convert map to uniform type (handles both map[string]interface{} and map[interface{}]interface{})
-		m, err := toStringMap(item)
-		if err != nil {
-			return nil, fmt.Errorf("service_definitions[%d]: %w", i, err)
+		// YAML parser produces map[interface{}]interface{} for each item
+		m, ok := item.(map[interface{}]interface{})
+		if !ok {
+			return nil, fmt.Errorf("service_definitions[%d]: expected map, got %T", i, item)
 		}
 
 		def := ServiceDefinition{}
 
-		if name, ok := m["name"].(string); ok {
-			def.Name = name
+		// Extract name (optional)
+		if nameVal, exists := m["name"]; exists {
+			if name, ok := nameVal.(string); ok {
+				def.Name = name
+			}
 		}
 
 		// Query is required - check type and value separately for better error messages
@@ -127,48 +131,6 @@ func parseServiceDefinitions(raw interface{}) ([]ServiceDefinition, error) {
 	}
 
 	return defs, nil
-}
-
-// normalizeSlice converts various slice types to []interface{} for uniform processing.
-func normalizeSlice(raw interface{}) ([]interface{}, error) {
-	switch s := raw.(type) {
-	case []interface{}:
-		return s, nil
-	case []map[string]interface{}:
-		result := make([]interface{}, len(s))
-		for i, v := range s {
-			result[i] = v
-		}
-		return result, nil
-	case []map[interface{}]interface{}:
-		result := make([]interface{}, len(s))
-		for i, v := range s {
-			result[i] = v
-		}
-		return result, nil
-	default:
-		return nil, fmt.Errorf("expected array, got %T", raw)
-	}
-}
-
-// toStringMap converts a map with arbitrary key types to a map[string]interface{}.
-func toStringMap(v interface{}) (map[string]interface{}, error) {
-	switch m := v.(type) {
-	case map[string]interface{}:
-		return m, nil
-	case map[interface{}]interface{}:
-		result := make(map[string]interface{}, len(m))
-		for k, val := range m {
-			keyStr, ok := k.(string)
-			if !ok {
-				return nil, fmt.Errorf("expected string key, got %T", k)
-			}
-			result[keyStr] = val
-		}
-		return result, nil
-	default:
-		return nil, fmt.Errorf("expected map, got %T", v)
-	}
 }
 
 // IsActive returns if service discovery is enabled and has at least one rule defined.
