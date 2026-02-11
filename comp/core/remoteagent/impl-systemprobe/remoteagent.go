@@ -17,6 +17,7 @@ import (
 	"github.com/DataDog/datadog-agent/comp/core/remoteagent/helper"
 	"github.com/DataDog/datadog-agent/comp/core/telemetry"
 	compdef "github.com/DataDog/datadog-agent/comp/def"
+	"github.com/DataDog/datadog-agent/pkg/logs/metrics"
 	pbcore "github.com/DataDog/datadog-agent/pkg/proto/pbgo/core"
 	"github.com/DataDog/datadog-agent/pkg/util/flavor"
 )
@@ -50,6 +51,10 @@ func NewComponent(reqs Requires) (Provides, error) {
 		return Provides{}, err
 	}
 
+	// Set the agent identity for log metrics partitioning so that
+	// logs.bytes_sent is tagged with remote_agent="system-probe".
+	metrics.SetAgentIdentity("system-probe")
+
 	remoteagentImpl := &remoteagentImpl{
 		log:               reqs.Log,
 		ipc:               reqs.IPC,
@@ -80,7 +85,7 @@ type remoteagentImpl struct {
 func (r *remoteagentImpl) GetTelemetry(_ context.Context, _ *pbcore.GetTelemetryRequest) (*pbcore.GetTelemetryResponse, error) {
 	prometheusText, err := r.telemetry.GatherText(false, telemetry.StaticMetricFilter(
 		// Metrics to forward from system-probe to core agent.
-		// The remote_agent tag is set to "system-probe" via metrics.GetAgentIdentityTag().
+		// The remote_agent tag is set to "system-probe" via metrics.SetAgentIdentity() above.
 		"logs__bytes_sent",
 	))
 	if err != nil {
