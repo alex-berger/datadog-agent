@@ -65,6 +65,7 @@ func (m *Manager) LookupEventInProfiles(event *model.Event) {
 	event.RecordCheckpoint("profile_resolve_tags")
 	event.FieldHandlers.ResolveContainerTags(event, &event.ProcessContext.Process.ContainerContext)
 	event.RecordCheckpoint("profile_resolve_tags_done")
+	event.RecordCheckpoint("after_resolve_tags_check_tags_len")
 	if len(event.ProcessContext.Process.ContainerContext.Tags) > 0 {
 		event.RecordCheckpoint("container_profile_lookup_start")
 		tags = event.ProcessContext.Process.ContainerContext.Tags
@@ -76,7 +77,7 @@ func (m *Manager) LookupEventInProfiles(event *model.Event) {
 		event.RecordCheckpoint("container_new_selector_done")
 		if err == nil {
 			// lookup profile
-			event.RecordCheckpoint("container_profile_lock_start")
+			event.RecordCheckpoint("container_profile_lock_wait_start")
 			m.profilesLock.Lock()
 			event.RecordCheckpoint("container_profile_lock_acquired")
 			profile = m.profiles[selector]
@@ -128,34 +129,50 @@ func (m *Manager) LookupEventInProfiles(event *model.Event) {
 		} else {
 			event.RecordCheckpoint("cgroup_new_selector_error")
 		}
+	} else {
+		event.RecordCheckpoint("no_container_tags_no_cgroup")
 	}
 	if profile == nil {
+		event.RecordCheckpoint("profile_not_found")
 		m.incrementEventFilteringStat(event.GetEventType(), model.NoProfile, NA)
 		return
 	}
+	event.RecordCheckpoint("profile_found")
 
 	if !profile.IsEventTypeValid(event.GetEventType()) || !profile.LoadedInKernel.Load() {
+		event.RecordCheckpoint("profile_event_type_invalid_or_not_loaded")
 		m.incrementEventFilteringStat(event.GetEventType(), model.NoProfile, NA)
 		return
 	}
 
+	event.RecordCheckpoint("profile_get_version_context_start")
 	ctx, found := profile.GetVersionContext(imageTag)
+	event.RecordCheckpoint("profile_get_version_context_done")
 	if found {
+		event.RecordCheckpoint("profile_version_context_found")
 		ctx.LastSeenNano = uint64(m.resolvers.TimeResolver.ComputeMonotonicTimestamp(time.Now()))
 	} else {
+		event.RecordCheckpoint("profile_prepare_new_version_start")
 		evictedVersions := profile.PrepareNewVersion(imageTag, tags, m.config.RuntimeSecurity.SecurityProfileMaxImageTags, uint64(m.resolvers.TimeResolver.ComputeMonotonicTimestamp(time.Now())))
+		event.RecordCheckpoint("profile_prepare_new_version_done")
 		for _, evictedVersion := range evictedVersions {
 			m.countEvictedVersion(imageTag, evictedVersion)
 		}
+		event.RecordCheckpoint("profile_get_version_context_retry_start")
 		ctx, found = profile.GetVersionContext(imageTag)
+		event.RecordCheckpoint("profile_get_version_context_retry_done")
 		if !found {
+			event.RecordCheckpoint("profile_version_context_not_found")
 			return
 		}
 	}
 
 	// if we have one version of the profile in unstable for this event type, just skip the whole process
+	event.RecordCheckpoint("profile_get_global_event_type_state_start")
 	globalEventTypeProfilState := profile.GetGlobalEventTypeState(event.GetEventType())
+	event.RecordCheckpoint("profile_get_global_event_type_state_done")
 	if globalEventTypeProfilState == model.UnstableEventType {
+		event.RecordCheckpoint("profile_global_state_unstable")
 		m.incrementEventFilteringStat(event.GetEventType(), model.UnstableEventType, NA)
 		// The anomaly flag can be set in kernel space by our eBPF programs (currently applies only to syscalls), reset
 		// the anomaly flag if the user space profile considers it to not be an anomaly. Here, when a version is unstable,
@@ -164,7 +181,9 @@ func (m *Manager) LookupEventInProfiles(event *model.Event) {
 		return
 	}
 
+	event.RecordCheckpoint("profile_tryAutolearn_start")
 	profileState := m.tryAutolearn(profile, ctx, event, imageTag)
+	event.RecordCheckpoint("profile_tryAutolearn_done")
 	if profileState != model.NoProfile {
 		ctx.EventTypeState[event.GetEventType()].State = profileState
 	}
@@ -224,13 +243,18 @@ func (m *Manager) LookupEventInProfiles(event *model.Event) {
 
 // tryAutolearn tries to autolearn the input event. It returns the profile state: stable, unstable, autolearning or workloadwarmup
 func (m *Manager) tryAutolearn(profile *profile.Profile, ctx *profile.VersionContext, event *model.Event, imageTag string) model.EventFilteringProfileState {
+	event.RecordCheckpoint("tryAutolearn_get_event_type_state_start")
 	profileState := m.getEventTypeState(profile, ctx, event, event.GetEventType(), imageTag)
+	event.RecordCheckpoint("tryAutolearn_get_event_type_state_done")
 	var nodeType activity_tree.NodeGenerationType
 	if profileState == model.AutoLearning {
+		event.RecordCheckpoint("tryAutolearn_autolearning")
 		nodeType = activity_tree.ProfileDrift
 	} else if profileState == model.WorkloadWarmup {
+		event.RecordCheckpoint("tryAutolearn_workload_warmup")
 		nodeType = activity_tree.WorkloadWarmup
 	} else { // Stable or Unstable state
+		event.RecordCheckpoint("tryAutolearn_stable_or_unstable")
 		return profileState
 	}
 
@@ -238,14 +262,24 @@ func (m *Manager) tryAutolearn(profile *profile.Profile, ctx *profile.VersionCon
 	// try to insert the event in the profile
 
 	// defines if we want or not to insert missing processes
+	event.RecordCheckpoint("tryAutolearn_check_insert_missing_processes")
 	insertMissingProcesses := false
 	if event.GetEventType() == model.ExecEventType {
 		insertMissingProcesses = true
-	} else if execState := m.getEventTypeState(profile, ctx, event, model.ExecEventType, imageTag); execState == model.AutoLearning || execState == model.WorkloadWarmup {
-		insertMissingProcesses = true
+		event.RecordCheckpoint("tryAutolearn_insert_missing_exec")
+	} else {
+		event.RecordCheckpoint("tryAutolearn_get_exec_state_start")
+		execState := m.getEventTypeState(profile, ctx, event, model.ExecEventType, imageTag)
+		event.RecordCheckpoint("tryAutolearn_get_exec_state_done")
+		if execState == model.AutoLearning || execState == model.WorkloadWarmup {
+			insertMissingProcesses = true
+			event.RecordCheckpoint("tryAutolearn_insert_missing_nonexec")
+		}
 	}
 
+	event.RecordCheckpoint("profile_insert_start")
 	newEntry, err := profile.Insert(event, insertMissingProcesses, imageTag, nodeType, m.resolvers)
+	event.RecordCheckpoint("profile_insert_done")
 	if err != nil {
 		m.incrementEventFilteringStat(event.GetEventType(), model.NoProfile, NA)
 		return model.NoProfile
@@ -687,23 +721,33 @@ func (m *Manager) getEventTypeState(p *profile.Profile, pctx *profile.VersionCon
 	}
 
 	// check if the unstable size limit was reached, but only for the event event type
+	event.RecordCheckpoint("get_event_type_state_check_size_threshold")
 	if eventType == event.GetEventType() && p.ComputeInMemorySize() >= m.config.RuntimeSecurity.AnomalyDetectionUnstableProfileSizeThreshold {
 		// for each event type we want to reach either the StableEventType or UnstableEventType states, even
 		// if we already reach the AnomalyDetectionUnstableProfileSizeThreshold. That's why we have to keep
 		// rearming the lastAnomalyNano timer based on if it's something new or not.
+		event.RecordCheckpoint("get_event_type_state_profile_contains_start")
 		found, err := p.Contains(event, false /*insertMissingProcesses*/, imageTag, nodeType, m.resolvers)
+		event.RecordCheckpoint("get_event_type_state_profile_contains_done")
 		if err != nil {
+			event.RecordCheckpoint("get_event_type_state_profile_contains_error")
 			m.incrementEventFilteringStat(eventType, model.NoProfile, NA)
 			return model.NoProfile
 		} else if !found {
+			event.RecordCheckpoint("get_event_type_state_profile_contains_not_found")
 			eventState.LastAnomalyNano = event.TimestampRaw
 		} else if profileState == model.WorkloadWarmup {
 			// if it's NOT something's new AND we are on container warmup period, just pretend
 			// we are in learning/warmup phase (as we know, this event is already present on the profile)
+			event.RecordCheckpoint("get_event_type_state_workload_warmup")
 			return model.WorkloadWarmup
+		} else {
+			event.RecordCheckpoint("get_event_type_state_profile_contains_found")
 		}
+		event.RecordCheckpoint("get_event_type_state_return_max_size")
 		return model.ProfileAtMaxSize
 	}
+	event.RecordCheckpoint("get_event_type_state_return_profile_state")
 	return profileState
 }
 

@@ -340,7 +340,9 @@ func (at *ActivityTree) isEventValid(event *model.Event, dryRun bool) (bool, err
 
 // Insert inserts the event in the activity tree
 func (at *ActivityTree) Insert(event *model.Event, insertMissingProcesses bool, imageTag string, generationType NodeGenerationType, resolvers *resolvers.EBPFResolvers) (bool, error) {
+	event.RecordCheckpoint("activity_tree_insert_start")
 	newEntry, err := at.insertEvent(event, false /* !dryRun */, insertMissingProcesses, imageTag, generationType, resolvers)
+	event.RecordCheckpoint("activity_tree_insert_done")
 	if newEntry {
 		// this doesn't count the exec events which are counted separately
 		at.Stats.counts[event.GetEventType()].addedCount[generationType].Inc()
@@ -361,13 +363,16 @@ func (at *ActivityTree) insertEvent(event *model.Event, dryRun bool, insertMissi
 		return false, fmt.Errorf("invalid generation type: %v", generationType)
 	}
 
+	event.RecordCheckpoint("activity_tree_check_event_valid")
 	// check if this event type is traced
 	if valid, err := at.isEventValid(event, dryRun); !valid || err != nil {
 		return false, err
 	}
 
+	event.RecordCheckpoint("activity_tree_create_process_node_start")
 	// Next we'll call CreateProcessNode, which will retrieve the process node if already present, or create a new one (with all its lineage if needed).
 	node, newProcessNode, err := at.CreateProcessNode(event.ProcessCacheEntry, imageTag, generationType, !insertMissingProcesses /*dryRun*/, resolvers)
+	event.RecordCheckpoint("activity_tree_create_process_node_done")
 	if err != nil {
 		return false, err
 	}
@@ -379,8 +384,10 @@ func (at *ActivityTree) insertEvent(event *model.Event, dryRun bool, insertMissi
 		return false, errors.New("a process node couldn't be found or created for this event")
 	}
 
+	event.RecordCheckpoint("activity_tree_resolve_fields_start")
 	// resolve fields
 	event.ResolveFieldsForAD()
+	event.RecordCheckpoint("activity_tree_resolve_fields_done")
 
 	// ignore events with an error
 	if event.Error != nil {

@@ -894,9 +894,11 @@ func (p *EBPFProbe) DispatchEvent(event *model.Event, notifyConsumers bool) {
 
 	// mark the events that have an associated activity dump
 	// this is needed for auto suppressions performed by the CWS rule engine
+	event.RecordCheckpoint("check_active_dump_start")
 	if p.profileManager.HasActiveActivityDump(event) {
 		event.AddToFlags(model.EventFlagsHasActiveActivityDump)
 	}
+	event.RecordCheckpoint("check_active_dump_done")
 
 	// send event to wildcard handlers, like the CWS rule engine, first
 	event.RecordCheckpoint("send_to_handlers_start")

@@ -221,6 +221,45 @@ func (nn *NetworkNamespace) dequeueNetworkDevices(tcResolver *tc.Resolver, manag
 	nn.flushNetworkDevicesQueue()
 }
 
+// dequeueNetworkDevicesWithEvent is like dequeueNetworkDevices but adds checkpoints for performance debugging
+func (nn *NetworkNamespace) dequeueNetworkDevicesWithEvent(tcResolver *tc.Resolver, manager *manager.Manager, event *model.Event) {
+	event.RecordCheckpoint("netns_dequeue_lock_start")
+	nn.Lock()
+	defer nn.Unlock()
+	event.RecordCheckpoint("netns_dequeue_lock_acquired")
+
+	if len(nn.networkDevicesQueue) == 0 {
+		event.RecordCheckpoint("netns_dequeue_queue_empty")
+		return
+	}
+
+	event.RecordCheckpoint("netns_dequeue_get_dup_start")
+	// make a copy of the network namespace handle to make sure we don't poison our internal cache if the eBPF library
+	// modifies the handle.
+	handle, err := nn.getNamespaceHandleDup()
+	event.RecordCheckpoint("netns_dequeue_get_dup_done")
+	if err != nil {
+		event.RecordCheckpoint("netns_dequeue_get_dup_error")
+		return
+	}
+
+	defer func() {
+		if cerr := handle.Close(); cerr != nil {
+			seclog.Warnf("could not close file [%s]: %s", handle.Name(), cerr)
+		}
+	}()
+
+	event.RecordCheckpoint("netns_dequeue_setup_classifiers_start")
+	for _, queuedDevice := range nn.networkDevicesQueue {
+		if err = tcResolver.SetupNewTCClassifierWithNetNSHandle(queuedDevice, handle, manager); err != nil {
+			seclog.Errorf("error setting up new tc classifier on queued device: %v", err)
+		}
+	}
+	event.RecordCheckpoint("netns_dequeue_setup_classifiers_done")
+	nn.flushNetworkDevicesQueue()
+	event.RecordCheckpoint("netns_dequeue_complete")
+}
+
 func (nn *NetworkNamespace) queueNetworkDevice(device model.NetDevice) {
 	nn.Lock()
 	defer nn.Unlock()
@@ -407,13 +446,13 @@ func (nr *Resolver) SaveNetworkNamespaceHandleLazyWithEvent(nsID uint32, nsPathF
 
 	// dequeue devices
 	event.RecordCheckpoint("netns_dequeue_devices_start")
-	netns.dequeueNetworkDevices(nr.tcResolver, nr.manager)
+	netns.dequeueNetworkDevicesWithEvent(nr.tcResolver, nr.manager, event)
 	event.RecordCheckpoint("netns_dequeue_devices_done")
 
 	// if the snapshot process is still going on, we need to snapshot the namespace now, otherwise we'll miss it
 	if nr.GetState() == sprocess.Snapshotting {
 		event.RecordCheckpoint("netns_snapshot_start")
-		_ = nr.snapshotNetworkDevices(netns)
+		_ = nr.snapshotNetworkDevicesWithEvent(netns, event)
 		event.RecordCheckpoint("netns_snapshot_done")
 	}
 
@@ -486,6 +525,67 @@ func (nr *Resolver) snapshotNetworkDevices(netns *NetworkNamespace) int {
 			seclog.Errorf("error setting up new tc classifier on snapshot: %v", err)
 		}
 	}
+
+	return attachedDeviceCountNoLazyDeletion
+}
+
+// snapshotNetworkDevicesWithEvent is like snapshotNetworkDevices but adds checkpoints for performance debugging
+func (nr *Resolver) snapshotNetworkDevicesWithEvent(netns *NetworkNamespace, event *model.Event) int {
+	event.RecordCheckpoint("netns_snapshot_get_dup_start")
+	handle, err := netns.getNamespaceHandleDup()
+	event.RecordCheckpoint("netns_snapshot_get_dup_done")
+	if err != nil {
+		event.RecordCheckpoint("netns_snapshot_get_dup_error")
+		return 0
+	}
+	defer func() {
+		if cerr := handle.Close(); cerr != nil {
+			seclog.Warnf("could not close file [%s]: %s", handle.Name(), cerr)
+		}
+	}()
+
+	event.RecordCheckpoint("netns_snapshot_get_netlink_start")
+	ntl, err := nr.manager.GetNetlinkSocket(uint64(handle.Fd()), netns.nsID)
+	event.RecordCheckpoint("netns_snapshot_get_netlink_done")
+	if err != nil {
+		event.RecordCheckpoint("netns_snapshot_get_netlink_error")
+		seclog.Errorf("couldn't open netlink socket: %s", err)
+		return 0
+	}
+
+	event.RecordCheckpoint("netns_snapshot_linklist_start")
+	links, err := ntl.Sock.LinkList()
+	event.RecordCheckpoint("netns_snapshot_linklist_done")
+	if err != nil {
+		event.RecordCheckpoint("netns_snapshot_linklist_error")
+		seclog.Errorf("couldn't list network interfaces in namespace %d: %s", netns.nsID, err)
+		return 0
+	}
+
+	event.RecordCheckpoint("netns_snapshot_setup_classifiers_start")
+	var attachedDeviceCountNoLazyDeletion int
+	for _, link := range links {
+		attrs := link.Attrs()
+		if attrs == nil {
+			continue
+		}
+
+		device := model.NetDevice{
+			Name:    attrs.Name,
+			IfIndex: uint32(attrs.Index),
+			NetNS:   netns.nsID,
+		}
+
+		if err = nr.tcResolver.SetupNewTCClassifierWithNetNSHandle(device, handle, nr.manager); err == nil {
+			// ignore interfaces that are lazily deleted
+			if !nr.IsLazyDeletionInterface(device.Name) && attrs.HardwareAddr.String() != "" {
+				attachedDeviceCountNoLazyDeletion++
+			}
+		} else {
+			seclog.Errorf("error setting up new tc classifier on snapshot: %v", err)
+		}
+	}
+	event.RecordCheckpoint("netns_snapshot_setup_classifiers_done")
 
 	return attachedDeviceCountNoLazyDeletion
 }
