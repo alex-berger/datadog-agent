@@ -3,11 +3,5 @@
 // This product includes software developed at Datadog (https://www.datadoghq.com/).
 // Copyright 2025-present Datadog, Inc.
 
-//go:build !linux || !nvml
-
+// Package gpu provides utilities for interacting with GPU resources.
 package gpu
-
-// GenerateDefaultNvmlPaths is not supported on non-Linux platforms.
-func GenerateDefaultNvmlPaths() []string {
-	return nil
-}

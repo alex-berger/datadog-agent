@@ -157,6 +157,7 @@ use (
 	pkg/util/filesystem
 	pkg/util/flavor
 	pkg/util/fxutil
+	pkg/util/gpu
 	pkg/util/grpc
 	pkg/util/hostinfo
 	pkg/util/hostname/validate

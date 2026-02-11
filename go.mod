@@ -1,6 +1,6 @@
 module github.com/DataDog/datadog-agent
 
-go 1.25.5
+go 1.25.6
 
 // v0.8.0 was tagged long ago, and appared on pkg.go.dev.  We do not want any tagged version
 // to appear there.  The trick to accomplish this is to make a new version (in this case v0.9.0)
@@ -975,6 +975,7 @@ require (
 	github.com/DataDog/datadog-agent/pkg/trace/log v0.76.0-rc.4
 	github.com/DataDog/datadog-agent/pkg/trace/stats v0.76.0-rc.4
 	github.com/DataDog/datadog-agent/pkg/trace/traceutil v0.76.0-rc.4
+	github.com/DataDog/datadog-agent/pkg/util/gpu v0.0.0-00010101000000-000000000000
 	github.com/DataDog/datadog-agent/pkg/util/kubernetes/apiserver/common/namespace v0.0.0-00010101000000-000000000000
 	github.com/DataDog/ddtrivy v0.0.0-20260115083325-07614fb0b8d5
 	github.com/Masterminds/squirrel v1.5.4
@@ -1389,6 +1390,7 @@ replace (
 	github.com/DataDog/datadog-agent/pkg/util/filesystem => ./pkg/util/filesystem
 	github.com/DataDog/datadog-agent/pkg/util/flavor => ./pkg/util/flavor
 	github.com/DataDog/datadog-agent/pkg/util/fxutil => ./pkg/util/fxutil
+	github.com/DataDog/datadog-agent/pkg/util/gpu => ./pkg/util/gpu
 	github.com/DataDog/datadog-agent/pkg/util/grpc => ./pkg/util/grpc
 	github.com/DataDog/datadog-agent/pkg/util/hostinfo => ./pkg/util/hostinfo
 	github.com/DataDog/datadog-agent/pkg/util/hostname/validate => ./pkg/util/hostname/validate
