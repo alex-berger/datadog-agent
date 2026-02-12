@@ -230,8 +230,11 @@ func TestFork2nd(t *testing.T) {
 	// [X(pid:3)]
 	//    |
 	// X(pid:4)
+	// Note: we use DeleteEntry directly (skipping ApplyExitEntry) because this
+	// test uses fake PIDs that may collide with real kernel threads. ApplyExitEntry
+	// calls reparentOrphanChildren which reads /proc and would corrupt the cache.
+	// Subreaper reparenting is tested separately in TestSubreaperReparenting.
 	exit(parent)
-	resolver.ApplyExitEntry(parent, nil)
 	resolver.DeleteEntry(parent.ProcessContext.Pid, parent.ResolveEventTime())
 	assert.Nil(t, resolver.entryCache[parent.ProcessCacheEntry.Pid])
 	assert.Equal(t, 1, len(resolver.entryCache))
@@ -286,7 +289,6 @@ func TestForkExec(t *testing.T) {
 	//    |
 	// X(pid:4) -- Y(pid:4)
 	exit(parent)
-	resolver.ApplyExitEntry(parent, nil)
 	resolver.DeleteEntry(parent.ProcessContext.Pid, parent.ResolveEventTime())
 	assert.Nil(t, resolver.entryCache[parent.ProcessCacheEntry.Pid])
 	assert.Equal(t, 1, len(resolver.entryCache))
@@ -352,7 +354,6 @@ func TestOrphanExec(t *testing.T) {
 	//    |
 	//  X(pid:4)
 	exit(parent)
-	resolver.ApplyExitEntry(parent, nil)
 	resolver.DeleteEntry(parent.ProcessContext.Pid, parent.ResolveEventTime())
 	assert.Nil(t, resolver.entryCache[parent.ProcessCacheEntry.Pid])
 	assert.Equal(t, 1, len(resolver.entryCache))
@@ -407,7 +408,6 @@ func TestForkExecExec(t *testing.T) {
 	//    |
 	//  X(pid:4)
 	exit(parent)
-	resolver.ApplyExitEntry(parent, nil)
 	resolver.DeleteEntry(parent.ProcessContext.Pid, parent.ResolveEventTime())
 	assert.Nil(t, resolver.entryCache[parent.ProcessCacheEntry.Pid])
 	assert.Equal(t, 1, len(resolver.entryCache))
@@ -474,7 +474,6 @@ func TestForkReuse(t *testing.T) {
 	//    |
 	//  X(pid:4)
 	exit(parent1)
-	resolver.ApplyExitEntry(parent1, nil)
 	resolver.DeleteEntry(parent1.ProcessContext.Pid, parent1.ResolveEventTime())
 	assert.Nil(t, resolver.entryCache[parent1.ProcessCacheEntry.Pid])
 	assert.Equal(t, 1, len(resolver.entryCache))
@@ -528,7 +527,6 @@ func TestForkReuse(t *testing.T) {
 	//    |
 	// T(pid:5)
 	exit(parent2)
-	resolver.ApplyExitEntry(parent2, nil)
 	resolver.DeleteEntry(parent2.ProcessContext.Pid, parent2.ResolveEventTime())
 	assert.Nil(t, resolver.entryCache[parent2.ProcessCacheEntry.Pid])
 	assert.Equal(t, 1, len(resolver.entryCache))
@@ -605,9 +603,7 @@ func TestForkForkExec(t *testing.T) {
 	//    |
 	// X(pid:5)
 	exit(parent)
-	resolver.ApplyExitEntry(parent, nil)
 	resolver.DeleteEntry(parent.ProcessContext.Pid, parent.ResolveEventTime())
-	assert.Nil(t, resolver.entryCache[parent.ProcessCacheEntry.Pid])
 	assert.Nil(t, resolver.entryCache[parent.ProcessCacheEntry.Pid])
 	assert.Equal(t, 2, len(resolver.entryCache))
 	assertChildrenCacheConsistency(t, resolver)
@@ -618,7 +614,6 @@ func TestForkForkExec(t *testing.T) {
 	//    |
 	// X(pid:5)
 	exit(childExec)
-	resolver.ApplyExitEntry(childExec, nil)
 	resolver.DeleteEntry(childExec.ProcessContext.Pid, childExec.ResolveEventTime())
 	assert.Nil(t, resolver.entryCache[childExec.ProcessCacheEntry.Pid])
 	assert.Equal(t, 1, len(resolver.entryCache))
@@ -663,7 +658,6 @@ func TestExecBomb(t *testing.T) {
 	//    |
 	// X(pid:4)
 	exit(parent)
-	resolver.ApplyExitEntry(parent, nil)
 	resolver.DeleteEntry(parent.ProcessContext.Pid, parent.ResolveEventTime())
 	assert.Nil(t, resolver.entryCache[parent.ProcessCacheEntry.Pid])
 	assert.Equal(t, 1, len(resolver.entryCache))

@@ -186,23 +186,26 @@ func (p *EBPFResolver) tryReparentEntryFromProcfs(entry *model.ProcessCacheEntry
 	}
 
 	newPPidU32 := uint32(newPPid)
-	if newPPidU32 == 0 || newPPidU32 == entry.PPid {
+	if newPPidU32 == 0 {
 		return
 	}
 
-	// Update the childrenCache: remove from old parent, add to new
-	p.removeChild(entry.PPid, entry.Pid)
-	p.addChild(newPPidU32, entry.Pid)
-
-	if newParent := p.entryCache[newPPidU32]; newParent != nil {
-		entry.Reparent(newParent)
-	} else {
-		entry.PPid = newPPidU32
-		// Parent still not in cache; keep IsParentMissing = true so we
-		// retry on the next event.
+	// Update the childrenCache if the ppid changed
+	if newPPidU32 != entry.PPid {
+		p.removeChild(entry.PPid, entry.Pid)
+		p.addChild(newPPidU32, entry.Pid)
 	}
 
-	p.invalidateDescendantsLineageCache(entry.Pid)
+	// Try to link to the parent in the cache. This also covers the case
+	// where a previous call already set the correct PPid but the parent
+	// was not yet in the cache at that time.
+	if newParent := p.entryCache[newPPidU32]; newParent != nil {
+		entry.Reparent(newParent)
+		p.invalidateDescendantsLineageCache(entry.Pid)
+	} else if newPPidU32 != entry.PPid {
+		entry.PPid = newPPidU32
+		p.invalidateDescendantsLineageCache(entry.Pid)
+	}
 }
 
 // invalidateDescendantsLineageCache recursively clears the cached lineage
@@ -274,6 +277,9 @@ func (p *EBPFResolver) reparentOrphanChildren(exitingPid uint32) {
 		if newParent := p.entryCache[newPPidU32]; newParent != nil {
 			entry.Reparent(newParent)
 		} else {
+			// The new parent is not in the cache. Update PPid, clear stale
+			// ancestor/parent pointers and mark for lazy repair via
+			// TryReparentFromProcfs on the next event.
 			entry.PPid = newPPidU32
 			entry.IsParentMissing = true
 			entry.Ancestor = nil
@@ -289,7 +295,7 @@ func (p *EBPFResolver) reparentOrphanChildren(exitingPid uint32) {
 }
 
 // markOrphan detaches a child from its exiting parent and marks it for
-// lazy reparenting: PPid is set to 0, the stale ancestor link is cleared,
+// lazy reparenting: PPid is set to 0, stale ancestor/parent links are cleared,
 // and IsParentMissing is set so that TryReparentFromProcfs can repair the
 // lineage on the next event.
 func (p *EBPFResolver) markOrphan(exitingPid, childPid uint32, entry *model.ProcessCacheEntry) {
