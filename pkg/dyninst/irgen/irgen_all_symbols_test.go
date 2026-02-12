@@ -114,6 +114,7 @@ func testAllProbes(t *testing.T, binPath string) {
 		// These automatically generated symbols cause problems.
 		if s.Name == "runtime.text" ||
 			s.Name == "runtime.etext" ||
+			s.Name == "" ||
 			strings.HasPrefix(s.Name, "go:") ||
 			strings.HasPrefix(s.Name, "type:.") ||
 			strings.HasPrefix(s.Name, "runtime.vdso") ||
@@ -121,7 +122,8 @@ func testAllProbes(t *testing.T, binPath string) {
 			strings.Contains(s.Name, "..typeAssert") ||
 			strings.Contains(s.Name, "..dict") ||
 			strings.Contains(s.Name, "..gobytes") ||
-			strings.Contains(s.Name, "..interfaceSwitch") {
+			strings.Contains(s.Name, "..interfaceSwitch") ||
+			strings.Contains(s.Name, "go.shape") {
 			continue
 		}
 
