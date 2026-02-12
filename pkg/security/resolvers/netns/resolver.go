@@ -194,7 +194,7 @@ func (nn *NetworkNamespace) hasValidHandle() bool {
 // Resolver is used to store namespace handles
 type Resolver struct {
 	sync.Mutex
-	state      *atomic.Int64
+	state      atomic.Int64
 	tcResolver *tc.Resolver
 	client     statsd.ClientInterface
 	config     *config.Config
@@ -206,7 +206,6 @@ type Resolver struct {
 // NewResolver returns a new instance of Resolver
 func NewResolver(config *config.Config, manager *manager.Manager, statsdClient statsd.ClientInterface, tcResolver *tc.Resolver) (*Resolver, error) {
 	nr := &Resolver{
-		state:      atomic.NewInt64(0),
 		client:     statsdClient,
 		config:     config,
 		manager:    manager,
@@ -238,7 +237,14 @@ func (nr *Resolver) GetState() int64 {
 // SaveNetworkNamespaceHandle inserts the provided process network namespace in the list of tracked network. Returns
 // true if a new entry was added.
 func (nr *Resolver) SaveNetworkNamespaceHandle(nsID uint32, nsPath *utils.NSPath) (*NetworkNamespace, bool) {
-	return nr.SaveNetworkNamespaceHandleLazy(nsID, func() *utils.NSPath {
+	nr.Lock()
+	defer nr.Unlock()
+
+	return nr.saveNetworkNamespaceHandle(nsID, nsPath)
+}
+
+func (nr *Resolver) saveNetworkNamespaceHandle(nsID uint32, nsPath *utils.NSPath) (*NetworkNamespace, bool) {
+	return nr.saveNetworkNamespaceHandleLazy(nsID, func() *utils.NSPath {
 		return nsPath
 	})
 }
@@ -252,6 +258,14 @@ func (nr *Resolver) SaveNetworkNamespaceHandleLazy(nsID uint32, nsPathFunc func(
 
 	nr.Lock()
 	defer nr.Unlock()
+
+	return nr.saveNetworkNamespaceHandleLazy(nsID, nsPathFunc)
+}
+
+func (nr *Resolver) saveNetworkNamespaceHandleLazy(nsID uint32, nsPathFunc func() *utils.NSPath) (*NetworkNamespace, bool) {
+	if !nr.config.NetworkEnabled || nsID == 0 || nsPathFunc == nil {
+		return nil, false
+	}
 
 	netns, found := nr.networkNamespaces.Get(nsID)
 	if !found {
@@ -375,19 +389,38 @@ func (nr *Resolver) IsLazyDeletionInterface(name string) bool {
 }
 
 // SyncCache snapshots /proc for the provided pid. This method returns true if it updated the namespace cache.
-func (nr *Resolver) SyncCache(pid uint32) bool {
+func (nr *Resolver) SyncCache() bool {
+	nr.Lock()
+	defer nr.Unlock()
+
 	if !nr.config.NetworkEnabled {
 		return false
 	}
 
-	nsPath := utils.NewNSPathFromPid(pid, utils.NetNsType)
-	nsID, err := nsPath.GetNSID()
+	processes, err := utils.GetProcesses()
 	if err != nil {
 		return false
 	}
 
-	_, isNewEntry := nr.SaveNetworkNamespaceHandle(nsID, nsPath)
-	return isNewEntry
+	nsSet := map[uint32]bool{}
+
+	for _, p := range processes {
+		nsPath := utils.NewNSPathFromPid(uint32(p.Pid), utils.NetNsType)
+		nsID, err := nsPath.GetNSID()
+		if err != nil {
+			continue
+		}
+
+		if _, ok := nsSet[nsID]; ok {
+			continue
+		}
+
+		nsSet[nsID] = true
+
+		_, _ = nr.saveNetworkNamespaceHandle(nsID, nsPath)
+	}
+
+	return true
 }
 
 // QueueNetworkDevice adds the input device to the map of queued network devices. Once a handle for the network namespace
