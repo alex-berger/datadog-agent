@@ -260,7 +260,6 @@ func (r *EBPFResolvers) Snapshot() error {
 	}
 
 	r.ProcessResolver.SetState(process.Snapshotted)
-	r.NamespaceResolver.SetState(process.Snapshotted)
 
 	selinuxStatusMap, err := managerhelper.Map(r.manager, "selinux_enforce_status")
 	if err != nil {
