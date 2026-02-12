@@ -29,6 +29,13 @@ func (pc *ProcessCacheEntry) setAncestor(parent *ProcessCacheEntry) {
 	pc.copyProcessContextFrom(parent)
 }
 
+// InvalidateLineageCache clears the cached lineage validation result for this entry.
+// This should be called when the process ancestry changes (e.g. after reparenting)
+// to force re-evaluation on the next HasValidLineage call.
+func (pc *ProcessCacheEntry) InvalidateLineageCache() {
+	pc.validLineageResult = nil
+}
+
 func hasValidLineage(pc *ProcessCacheEntry, result *validLineageResult) (bool, error) {
 	var (
 		pid, ppid uint32
@@ -209,6 +216,8 @@ func (pc *ProcessCacheEntry) Fork(child *ProcessCacheEntry) {
 // This handles the subreaper mechanism where children are reparented when their parent exits.
 func (pc *ProcessCacheEntry) Reparent(newParent *ProcessCacheEntry) {
 	pc.PPid = newParent.Pid
+	pc.IsParentMissing = false
+	pc.validLineageResult = nil
 	pc.setAncestor(newParent)
 }
 

@@ -155,10 +155,78 @@ func (p *EBPFResolver) resolveParentFromProcfs(entry *model.ProcessCacheEntry) {
 	}
 }
 
+// TryReparentFromProcfs walks the ancestor chain of the given entry and
+// attempts to repair any broken link (IsParentMissing == true) by reading the
+// current ppid from procfs and linking to the parent in the cache. This is
+// called lazily from setProcessContext on every event, so it covers the race
+// where the exit tracepoint fires before the kernel has completed
+// forget_original_parent().
+func (p *EBPFResolver) TryReparentFromProcfs(entry *model.ProcessCacheEntry) {
+	p.Lock()
+	defer p.Unlock()
+
+	for pc := entry; pc != nil; pc = pc.Ancestor {
+		if pc.IsParentMissing {
+			p.tryReparentEntryFromProcfs(pc)
+		}
+	}
+}
+
+// tryReparentEntryFromProcfs resolves the ppid of a single entry from procfs
+// and updates the cache accordingly. Must be called with the lock held.
+func (p *EBPFResolver) tryReparentEntryFromProcfs(entry *model.ProcessCacheEntry) {
+	proc, err := process.NewProcess(int32(entry.Pid))
+	if err != nil {
+		return
+	}
+
+	newPPid, err := proc.Ppid()
+	if err != nil {
+		return
+	}
+
+	newPPidU32 := uint32(newPPid)
+	if newPPidU32 == 0 || newPPidU32 == entry.PPid {
+		return
+	}
+
+	// Update the childrenCache: remove from old parent, add to new
+	p.removeChild(entry.PPid, entry.Pid)
+	p.addChild(newPPidU32, entry.Pid)
+
+	if newParent := p.entryCache[newPPidU32]; newParent != nil {
+		entry.Reparent(newParent)
+	} else {
+		entry.PPid = newPPidU32
+		// Parent still not in cache; keep IsParentMissing = true so we
+		// retry on the next event.
+	}
+
+	p.invalidateDescendantsLineageCache(entry.Pid)
+}
+
+// invalidateDescendantsLineageCache recursively clears the cached lineage
+// validation result for all descendants of the given pid. This must be called
+// after reparenting a process, because all its descendants share a cached
+// lineage result that was computed through the old ancestry chain.
+func (p *EBPFResolver) invalidateDescendantsLineageCache(pid uint32) {
+	for childPid := range p.childrenCache[pid] {
+		if entry := p.entryCache[childPid]; entry != nil {
+			entry.InvalidateLineageCache()
+		}
+		p.invalidateDescendantsLineageCache(childPid)
+	}
+}
+
 // reparentOrphanChildren looks for cache entries that have exitingPid as their PPid,
 // and updates their PPid by reading the new value from procfs.
 // This handles the Linux subreaper mechanism where children are reparented
 // when their parent exits.
+//
+// Because the exit tracepoint fires at the beginning of do_exit() (before the
+// kernel's forget_original_parent()), procfs may still report the old ppid.
+// When that happens the child is marked with IsParentMissing so that the next
+// event handled by setProcessContext will attempt to repair the lineage.
 func (p *EBPFResolver) reparentOrphanChildren(exitingPid uint32) {
 	children := p.childrenCache[exitingPid]
 	if len(children) == 0 {
@@ -180,16 +248,26 @@ func (p *EBPFResolver) reparentOrphanChildren(exitingPid uint32) {
 		proc, err := process.NewProcess(int32(entry.Pid))
 		if err != nil {
 			seclog.Debugf("unable to create process for pid %d during reparenting: %v", entry.Pid, err)
+			p.markOrphan(exitingPid, childPid, entry)
 			continue
 		}
 
 		newPPid, err := proc.Ppid()
 		if err != nil {
 			seclog.Debugf("unable to resolve new ppid from procfs for pid %d: %v", entry.Pid, err)
+			p.markOrphan(exitingPid, childPid, entry)
 			continue
 		}
 
 		newPPidU32 := uint32(newPPid)
+		if newPPidU32 == exitingPid {
+			// The kernel hasn't completed forget_original_parent() yet.
+			// Mark the child as orphan; setProcessContext will repair it
+			// on the next event for this process or any of its descendants.
+			p.markOrphan(exitingPid, childPid, entry)
+			continue
+		}
+
 		p.removeChild(exitingPid, childPid)
 		p.addChild(newPPidU32, childPid)
 
@@ -197,8 +275,33 @@ func (p *EBPFResolver) reparentOrphanChildren(exitingPid uint32) {
 			entry.Reparent(newParent)
 		} else {
 			entry.PPid = newPPidU32
+			entry.IsParentMissing = true
+			entry.Ancestor = nil
+			entry.Parent = nil
+			entry.InvalidateLineageCache()
 		}
+
+		// Invalidate the cached lineage result for all descendants of this
+		// reparented process, since their cached results were computed through
+		// the old ancestry chain.
+		p.invalidateDescendantsLineageCache(childPid)
 	}
+}
+
+// markOrphan detaches a child from its exiting parent and marks it for
+// lazy reparenting: PPid is set to 0, the stale ancestor link is cleared,
+// and IsParentMissing is set so that TryReparentFromProcfs can repair the
+// lineage on the next event.
+func (p *EBPFResolver) markOrphan(exitingPid, childPid uint32, entry *model.ProcessCacheEntry) {
+	p.removeChild(exitingPid, childPid)
+
+	entry.PPid = 0
+	entry.IsParentMissing = true
+	entry.Ancestor = nil
+	entry.Parent = nil
+	entry.InvalidateLineageCache()
+
+	p.invalidateDescendantsLineageCache(childPid)
 }
 
 // DequeueExited dequeue exited process
