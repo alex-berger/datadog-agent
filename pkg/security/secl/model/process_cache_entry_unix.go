@@ -205,6 +205,13 @@ func (pc *ProcessCacheEntry) Fork(child *ProcessCacheEntry) {
 	child.SetForkParent(pc)
 }
 
+// Reparent updates the parent of the process cache entry to reflect reparenting by the kernel.
+// This handles the subreaper mechanism where children are reparented when their parent exits.
+func (pc *ProcessCacheEntry) Reparent(newParent *ProcessCacheEntry) {
+	pc.PPid = newParent.Pid
+	pc.setAncestor(newParent)
+}
+
 // Equals returns whether process cache entries share the same values for file and args/envs
 func (pc *ProcessCacheEntry) Equals(entry *ProcessCacheEntry) bool {
 	return (pc.FileEvent.Equals(&entry.FileEvent) &&

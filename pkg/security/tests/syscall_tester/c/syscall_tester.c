@@ -1928,6 +1928,54 @@ int test_dnsloop(int argc, char **argv) {
     return EXIT_SUCCESS;
 }
 
+// subreaper test: sets the current process as a subreaper, forks a child that
+// forks a grandchild and immediately exits. The grandchild is reparented to the
+// subreaper and opens the file given as argument.
+// Usage: syscall_tester subreaper <filepath>
+int test_subreaper(int argc, char **argv) {
+    if (argc < 2) {
+        fprintf(stderr, "Usage: subreaper <filepath>\n");
+        return EXIT_FAILURE;
+    }
+    char *filepath = argv[1];
+
+    if (prctl(PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) != 0) {
+        perror("prctl PR_SET_CHILD_SUBREAPER");
+        return EXIT_FAILURE;
+    }
+
+    pid_t child = fork();
+    if (child < 0) {
+        perror("fork (child)");
+        return EXIT_FAILURE;
+    }
+
+    if (child == 0) {
+        // child: fork a grandchild and exit immediately
+        pid_t grandchild = fork();
+        if (grandchild < 0) {
+            perror("fork (grandchild)");
+            _exit(EXIT_FAILURE);
+        }
+        if (grandchild == 0) {
+            // grandchild: wait a bit for the child to exit and reparenting to happen
+            usleep(200000);
+            int fd = open(filepath, O_RDONLY | O_CREAT, 0400);
+            if (fd > 0)
+                close(fd);
+            _exit(EXIT_SUCCESS);
+        }
+        // child exits, grandchild will be reparented to the subreaper
+        _exit(EXIT_SUCCESS);
+    }
+
+    // subreaper: wait for child, then wait for reparented grandchild
+    waitpid(child, NULL, 0);
+    wait(NULL);
+
+    return EXIT_SUCCESS;
+}
+
 int main(int argc, char **argv) {
     setbuf(stdout, NULL);
 
@@ -2047,6 +2095,8 @@ int main(int argc, char **argv) {
             exit_code = test_udploop(sub_argc, sub_argv);
         } else if (strcmp(cmd, "dnsloop") == 0) {
             exit_code = test_dnsloop(sub_argc, sub_argv);
+        } else if (strcmp(cmd, "subreaper") == 0) {
+            exit_code = test_subreaper(sub_argc, sub_argv);
         } else {
             fprintf(stderr, "Unknown command: %s\n", cmd);
             exit_code = EXIT_FAILURE;

@@ -98,6 +98,7 @@ type EBPFResolver struct {
 	inodeErrStats             map[string]*atomic.Int64 // inode error stats by tag
 
 	entryCache              map[uint32]*model.ProcessCacheEntry
+	childrenCache           map[uint32]map[uint32]struct{} // PPid -> set of child PIDs
 	SnapshottedBoundSockets map[uint32][]model.SnapshottedBoundSocket
 	argsEnvsCache           *simplelru.LRU[uint64, *argsEnvsCacheEntry]
 
@@ -107,12 +108,106 @@ type EBPFResolver struct {
 	exitedQueue []uint32
 }
 
+func (p *EBPFResolver) addChild(ppid, pid uint32) {
+	children := p.childrenCache[ppid]
+	if children == nil {
+		children = make(map[uint32]struct{})
+		p.childrenCache[ppid] = children
+	}
+	children[pid] = struct{}{}
+}
+
+func (p *EBPFResolver) removeChild(ppid, pid uint32) {
+	if children := p.childrenCache[ppid]; children != nil {
+		delete(children, pid)
+		if len(children) == 0 {
+			delete(p.childrenCache, ppid)
+		}
+	}
+}
+
+// resolveParentFromProcfs resolves the PPid of the given entry from procfs and links
+// it to its parent in the cache if available. This handles cases where the PPid is
+// missing (e.g. subreaper reparenting).
+// Note: the caller is responsible for maintaining the childrenCache.
+func (p *EBPFResolver) resolveParentFromProcfs(entry *model.ProcessCacheEntry) {
+	proc, err := process.NewProcess(int32(entry.Pid))
+	if err != nil {
+		seclog.Debugf("unable to create process for pid %d during ppid resolution: %v", entry.Pid, err)
+		return
+	}
+
+	newPPid, err := proc.Ppid()
+	if err != nil {
+		seclog.Debugf("unable to resolve ppid from procfs for pid %d: %v", entry.Pid, err)
+		return
+	}
+
+	newPPidU32 := uint32(newPPid)
+	if newPPidU32 == entry.PPid {
+		return
+	}
+
+	entry.PPid = newPPidU32
+
+	if newParent := p.entryCache[newPPidU32]; newParent != nil {
+		entry.Reparent(newParent)
+	}
+}
+
+// reparentOrphanChildren looks for cache entries that have exitingPid as their PPid,
+// and updates their PPid by reading the new value from procfs.
+// This handles the Linux subreaper mechanism where children are reparented
+// when their parent exits.
+func (p *EBPFResolver) reparentOrphanChildren(exitingPid uint32) {
+	children := p.childrenCache[exitingPid]
+	if len(children) == 0 {
+		return
+	}
+
+	// snapshot children PIDs since the map will be modified during iteration
+	childPids := make([]uint32, 0, len(children))
+	for childPid := range children {
+		childPids = append(childPids, childPid)
+	}
+
+	for _, childPid := range childPids {
+		entry := p.entryCache[childPid]
+		if entry == nil || entry.PPid != exitingPid {
+			continue
+		}
+
+		proc, err := process.NewProcess(int32(entry.Pid))
+		if err != nil {
+			seclog.Debugf("unable to create process for pid %d during reparenting: %v", entry.Pid, err)
+			continue
+		}
+
+		newPPid, err := proc.Ppid()
+		if err != nil {
+			seclog.Debugf("unable to resolve new ppid from procfs for pid %d: %v", entry.Pid, err)
+			continue
+		}
+
+		newPPidU32 := uint32(newPPid)
+		p.removeChild(exitingPid, childPid)
+		p.addChild(newPPidU32, childPid)
+
+		if newParent := p.entryCache[newPPidU32]; newParent != nil {
+			entry.Reparent(newParent)
+		} else {
+			entry.PPid = newPPidU32
+		}
+	}
+}
+
 // DequeueExited dequeue exited process
 func (p *EBPFResolver) DequeueExited() {
 	p.Lock()
 	defer p.Unlock()
 
 	delEntry := func(pid uint32, exitTime time.Time) {
+		p.reparentOrphanChildren(pid)
 		p.deleteEntry(pid, exitTime)
 		p.flushedEntries.Inc()
 	}
@@ -344,8 +439,16 @@ func (p *EBPFResolver) ApplyExitEntry(event *model.Event, newEntryCb func(*model
 	// The pid_cache kernel map has the exit_time but it's only accessed if there's a local miss
 	event.ProcessCacheEntry.ExitTime = event.FieldHandlers.ResolveEventTime(event, &event.BaseEvent)
 	event.Exit.Process = &event.ProcessCacheEntry.Process
-	return true
 
+	// Immediately reparent orphan children of the exiting process. This handles
+	// the Linux subreaper mechanism: when a process exits, its children may be
+	// reparented to the nearest subreaper ancestor (or init). Without this, the
+	// process cache would keep stale parent references until the next cache flush
+	// (up to 2 minutes), causing events on reparented children to report incorrect
+	// parent lineage.
+	p.reparentOrphanChildren(event.PIDContext.Pid)
+
+	return true
 }
 
 // enrichEventFromProcfs uses /proc to enrich a ProcessCacheEntry with additional metadata
@@ -575,7 +678,18 @@ func (p *EBPFResolver) RetrieveFileFieldsFromProcfs(filename string) (*model.Fil
 func (p *EBPFResolver) insertEntry(entry *model.ProcessCacheEntry, cgroupContext model.CGroupContext, source uint64) {
 	entry.Source = source
 
+	// maintain children cache: remove previous entry's relationship if it exists
+	if prev := p.entryCache[entry.Pid]; prev != nil {
+		p.removeChild(prev.PPid, entry.Pid)
+	}
 	p.entryCache[entry.Pid] = entry
+
+	// resolve missing PPid from procfs before updating the children cache
+	if entry.PPid == 0 && entry.Pid != 1 {
+		p.resolveParentFromProcfs(entry)
+	}
+
+	p.addChild(entry.PPid, entry.Pid)
 
 	// handle cgroup & container context
 	if p.cgroupResolver != nil {
@@ -678,6 +792,8 @@ func (p *EBPFResolver) deleteEntry(pid uint32, exitTime time.Time) {
 	if p.cgroupResolver != nil {
 		p.cgroupResolver.DelPID(entry.Pid)
 	}
+
+	p.removeChild(entry.PPid, entry.Pid)
 
 	entry.Exit(exitTime)
 	delete(p.entryCache, entry.Pid)
@@ -1580,6 +1696,7 @@ func NewEBPFResolver(manager *manager.Manager, config *config.Config, statsdClie
 		statsdClient:              statsdClient,
 		scrubber:                  scrubber,
 		entryCache:                make(map[uint32]*model.ProcessCacheEntry),
+		childrenCache:             make(map[uint32]map[uint32]struct{}),
 		SnapshottedBoundSockets:   make(map[uint32][]model.SnapshottedBoundSocket),
 		opts:                      *opts,
 		argsEnvsCache:             argsEnvsCache,
