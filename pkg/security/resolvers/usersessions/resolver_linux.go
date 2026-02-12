@@ -75,8 +75,9 @@ type incrementalFileReader struct {
 
 // SSHSessionKey describes the key to a ssh session in the LRU
 type SSHSessionKey struct {
-	IP   string // net.IP.String()
-	Port string
+	SSHDPid string
+	IP      string // net.IP.String()
+	Port    string
 }
 
 // SSHSessionValue describes the value to a ssh session in the LRU
@@ -248,6 +249,7 @@ func parseSSHLogLine(line string, sshSessionParsed *lru.Cache[SSHSessionKey, SSH
 		Date      string
 		Hostname  string
 		Service   string
+		SSHDPid   string
 		Remaining string
 	}
 	type SSHParsedLine struct {
@@ -264,6 +266,8 @@ func parseSSHLogLine(line string, sshSessionParsed *lru.Cache[SSHSessionKey, SSH
 	if len(words) < 5 {
 		return
 	}
+	var parsedPid string
+	var startPid, endPid int
 	switch {
 	// We saw two different types of logs, so we try to parse both
 	// We use HasPrefix because sshd is followed by its PID : sshd[pid]
@@ -274,6 +278,9 @@ func parseSSHLogLine(line string, sshSessionParsed *lru.Cache[SSHSessionKey, SSH
 			Service:   words[2],
 			Remaining: strings.Join(words[3:], " "),
 		}
+		startPid = strings.Index(words[2], "[")
+		endPid = strings.Index(words[2], "]")
+		parsedPid = words[2][startPid+1 : endPid]
 	case strings.HasPrefix(words[4], "sshd"):
 		sshLogLine = SSHLogLine{
 			Date:      words[2],
@@ -281,9 +288,18 @@ func parseSSHLogLine(line string, sshSessionParsed *lru.Cache[SSHSessionKey, SSH
 			Service:   words[4],
 			Remaining: strings.Join(words[5:], " "),
 		}
+		startPid = strings.Index(words[4], "[")
+		endPid = strings.Index(words[4], "]")
+		parsedPid = words[4][startPid+1 : endPid]
 	default:
 		return
 	}
+	if startPid == -1 || endPid == -1 {
+		seclog.Debugf("Pid not found for sshd line %q", line)
+		return
+	}
+	sshLogLine.SSHDPid = parsedPid
+
 	// if the service is "sshd" and the line starts with "Accepted" it's the beginning of an ssh session
 	if strings.HasPrefix(sshLogLine.Service, "sshd") && strings.HasPrefix(sshLogLine.Remaining, "Accepted") {
 		// One example of line is: "Accepted publickey for lima from 192.168.5.2 port 38835 ssh2: ED25519 SHA256:J3I5W45pnQtan5u0m27HWzyqAMZfTbG+nRet/pzzylU"
@@ -324,8 +340,9 @@ func parseSSHLogLine(line string, sshSessionParsed *lru.Cache[SSHSessionKey, SSH
 			authType = usersession.SSHAuthMethodUnknown
 		}
 		key := SSHSessionKey{
-			IP:   parsedIP.String(),
-			Port: sshParsedLine.Port,
+			SSHDPid: sshLogLine.SSHDPid,
+			IP:      parsedIP.String(),
+			Port:    sshParsedLine.Port,
 		}
 		value := SSHSessionValue{
 			AuthenticationMethod: int(authType),
@@ -556,9 +573,28 @@ func HandleSSHUserSession(pc *model.ProcessContext, envp []string) {
 				seclog.Warnf("failed to parse SSH_CLIENT port from %q: %v", sshClientVar, err)
 			} else {
 				pc.UserSession.SSHClientPort = port
+				pc.UserSession.SSHDPid = getSSHDPid(pc)
 			}
 		} else {
 			seclog.Tracef("SSH_CLIENT is not in the expected format: %q", sshClientVar)
 		}
 	}
+}
+
+func getSSHDPid(pc *model.ProcessContext) uint32 {
+	numberOfSSHD := 0
+	currentPid := pc.Pid
+	// Get first parent to handle only pce after
+	pce := pc.Ancestor
+	if pce != nil && strings.HasPrefix(pce.Comm, "sshd") && pce.Pid != currentPid {
+		numberOfSSHD++
+	}
+	for pce.Ancestor != nil && numberOfSSHD < 2 {
+		parent := pce.Ancestor
+		if strings.HasPrefix(parent.Comm, "sshd") && parent.ProcessContext.Pid != currentPid {
+			numberOfSSHD++
+		}
+		pce = pce.Ancestor
+	}
+	return pce.Pid
 }
