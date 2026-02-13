@@ -15,12 +15,97 @@ import (
 	"testing"
 
 	"github.com/DataDog/datadog-agent/comp/core/config"
+	"github.com/DataDog/datadog-agent/comp/host-profiler/collector/impl/extensions/hpflareextension"
+	"github.com/DataDog/datadog-agent/comp/host-profiler/collector/impl/receiver"
+	ddprofilingextensionimpl "github.com/DataDog/datadog-agent/comp/otelcol/ddprofilingextension/impl"
+	"github.com/DataDog/datadog-agent/comp/otelcol/otlp/components/processor/infraattributesprocessor"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/attributesprocessor"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/cumulativetodeltaprocessor"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/k8sattributesprocessor"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/resourcedetectionprocessor"
+	"github.com/open-telemetry/opentelemetry-collector-contrib/processor/resourceprocessor"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/collector/confmap"
+	"go.opentelemetry.io/collector/exporter/debugexporter"
+	"go.opentelemetry.io/collector/exporter/otlphttpexporter"
+	"go.opentelemetry.io/collector/extension"
+	"go.opentelemetry.io/collector/featuregate"
+	"go.opentelemetry.io/collector/otelcol"
+	"go.opentelemetry.io/collector/otelcol/otelcoltest"
+	"go.opentelemetry.io/collector/receiver/otlpreceiver"
+	"go.opentelemetry.io/collector/service/telemetry/otelconftelemetry"
 	"gopkg.in/yaml.v3"
 )
 
 var updateGolden = flag.Bool("update", false, "update golden test files")
+
+func init() {
+	// Enable profiles support for all tests (required for profiles pipeline validation)
+	_ = featuregate.GlobalRegistry().Set("service.profilesSupport", true)
+}
+
+// createTestFactories creates the OTEL factories needed for validation
+func createTestFactories(t *testing.T) otelcol.Factories {
+	t.Helper()
+
+	receivers, err := otelcol.MakeFactoryMap(
+		receiver.NewFactory(),
+		otlpreceiver.NewFactory(),
+	)
+	require.NoError(t, err)
+
+	exporters, err := otelcol.MakeFactoryMap(
+		debugexporter.NewFactory(),
+		otlphttpexporter.NewFactory(),
+	)
+	require.NoError(t, err)
+
+	processors, err := otelcol.MakeFactoryMap(
+		attributesprocessor.NewFactory(),
+		cumulativetodeltaprocessor.NewFactory(),
+		infraattributesprocessor.NewFactory(),
+		k8sattributesprocessor.NewFactory(),
+		resourcedetectionprocessor.NewFactory(),
+		resourceprocessor.NewFactory(),
+	)
+	require.NoError(t, err)
+
+	// Create standalone extensions (without Agent dependencies)
+	// Note: hpflareextension is passed nil for ipc component since we're only validating config structure
+	extensionFactories := []extension.Factory{
+		ddprofilingextensionimpl.NewFactory(),
+		hpflareextension.NewFactoryForAgent(nil),
+	}
+	extensions, err := otelcol.MakeFactoryMap(extensionFactories...)
+	require.NoError(t, err)
+
+	return otelcol.Factories{
+		Receivers:  receivers,
+		Exporters:  exporters,
+		Processors: processors,
+		Extensions: extensions,
+		Telemetry:  otelconftelemetry.NewFactory(),
+	}
+}
+
+// validateOTelConfig validates an OTEL collector configuration by unmarshaling it
+// and calling the OTEL collector's Validate() method
+func validateOTelConfig(t *testing.T, conf *confmap.Conf) error {
+	t.Helper()
+
+	factories := createTestFactories(t)
+
+	// Write config to a temporary file
+	tmpDir := t.TempDir()
+	tmpFile := filepath.Join(tmpDir, "otel-config.yaml")
+	data, err := yaml.Marshal(conf.ToStringMap())
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(tmpFile, data, 0644))
+
+	// Load and validate the config using otelcoltest
+	_, err = otelcoltest.LoadConfigAndValidate(tmpFile, factories)
+	return err
+}
 
 // loadConfig loads a YAML file and returns a mock config with explicit overrides
 // to prevent environment variables from interfering with test values
@@ -122,6 +207,10 @@ func TestProvider(t *testing.T) {
 			actual, err := retrieved.AsConf()
 			require.NoError(t, err)
 
+			// Validate the OTEL config
+			err = validateOTelConfig(t, actual)
+			require.NoError(t, err, "OTEL config validation failed")
+
 			if *updateGolden {
 				path := filepath.Join("td", tt.expectedOTel)
 				require.NoError(t, os.MkdirAll(filepath.Dir(path), 0755))
@@ -154,6 +243,10 @@ func TestProviderMultipleEndpoints(t *testing.T) {
 
 	actual, err := retrieved.AsConf()
 	require.NoError(t, err)
+
+	// Validate the OTEL config
+	err = validateOTelConfig(t, actual)
+	require.NoError(t, err, "OTEL config validation failed")
 
 	actualMap := actual.ToStringMap()
 
