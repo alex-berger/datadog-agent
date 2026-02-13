@@ -5,7 +5,6 @@ go 1.25.6
 require (
 	github.com/DataDog/datadog-agent/pkg/config/model v0.64.0-devel
 	github.com/DataDog/datadog-agent/pkg/util/filesystem v0.61.0
-	github.com/DataDog/datadog-agent/pkg/util/gpu v0.0.0-00010101000000-000000000000
 	github.com/DataDog/datadog-agent/pkg/util/log v0.64.0-devel
 	github.com/DataDog/datadog-agent/pkg/util/system v0.61.0
 	github.com/stretchr/testify v1.11.1
@@ -185,7 +184,6 @@ replace (
 	github.com/DataDog/datadog-agent/pkg/util/filesystem => ../../../pkg/util/filesystem
 	github.com/DataDog/datadog-agent/pkg/util/flavor => ../../../pkg/util/flavor
 	github.com/DataDog/datadog-agent/pkg/util/fxutil => ../../../pkg/util/fxutil
-	github.com/DataDog/datadog-agent/pkg/util/gpu => ../../../pkg/util/gpu
 	github.com/DataDog/datadog-agent/pkg/util/grpc => ../../../pkg/util/grpc
 	github.com/DataDog/datadog-agent/pkg/util/hostinfo => ../../../pkg/util/hostinfo
 	github.com/DataDog/datadog-agent/pkg/util/hostname/validate => ../../../pkg/util/hostname/validate

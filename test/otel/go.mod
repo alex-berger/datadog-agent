@@ -63,7 +63,6 @@ require (
 	github.com/DataDog/datadog-agent/pkg/trace/otel v0.77.0-devel // indirect
 	github.com/DataDog/datadog-agent/pkg/trace/stats v0.76.0-rc.4 // indirect
 	github.com/DataDog/datadog-agent/pkg/trace/traceutil v0.76.0-rc.4 // indirect
-	github.com/DataDog/datadog-agent/pkg/util/gpu v0.0.0-00010101000000-000000000000 // indirect
 	github.com/DataDog/go-tuf v1.1.1-0.5.2 // indirect
 	github.com/DataDog/mmh3 v0.0.0-20210722141835-012dc69a9e49 // indirect
 	github.com/DataDog/zstd_0 v0.0.0-20210310093942-586c1286621f // indirect
@@ -384,7 +383,6 @@ replace (
 	github.com/DataDog/datadog-agent/pkg/util/filesystem => ../../pkg/util/filesystem
 	github.com/DataDog/datadog-agent/pkg/util/flavor => ../../pkg/util/flavor
 	github.com/DataDog/datadog-agent/pkg/util/fxutil => ../../pkg/util/fxutil
-	github.com/DataDog/datadog-agent/pkg/util/gpu => ../../pkg/util/gpu
 	github.com/DataDog/datadog-agent/pkg/util/grpc => ../../pkg/util/grpc
 	github.com/DataDog/datadog-agent/pkg/util/hostinfo => ../../pkg/util/hostinfo
 	github.com/DataDog/datadog-agent/pkg/util/hostname/validate => ../../pkg/util/hostname/validate
