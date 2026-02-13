@@ -28,6 +28,7 @@ type registeredCheck struct {
 	checkName string
 	checkFn   healthplatform.HealthCheckFunc
 	interval  time.Duration
+	once      bool
 	stopCh    chan struct{}
 }
 
@@ -117,6 +118,7 @@ func (r *checkRunner) RegisterCheck(checkID, checkName string, checkFn healthpla
 		checkName: checkName,
 		checkFn:   checkFn,
 		interval:  interval,
+		once:      once,
 		stopCh:    make(chan struct{}),
 	}
 
