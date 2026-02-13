@@ -1,12 +1,9 @@
 package agentprovider
 
 import (
-	"net/url"
-	"strings"
-
 	"github.com/DataDog/datadog-agent/comp/core/config"
+	configutils "github.com/DataDog/datadog-agent/pkg/config/utils"
 	"github.com/DataDog/datadog-agent/pkg/util/log"
-	"golang.org/x/net/publicsuffix"
 )
 
 type endpoint struct {
@@ -18,26 +15,6 @@ type configManager struct {
 	endpointsTotalLength int
 	endpoints []endpoint
 	config    config.Component
-}
-
-func extractSite(s string) string {
-	u, err := url.Parse(s)
-	if err != nil {
-		log.Debugf("Failed to parse URL %s: %v", s, err)
-		return ""
-	}
-
-	hostname := strings.Trim(u.Hostname(), ".")
-	if hostname == "" {
-		return ""
-	}
-	apexDomain, err := publicsuffix.EffectiveTLDPlusOne(hostname)
-	if err != nil {
-		log.Debugf("Failed to extract apex domain from %s: %v", hostname, err)
-		return hostname
-	}
-
-	return apexDomain
 }
 
 func newConfigManager(config config.Component) configManager {
@@ -52,7 +29,10 @@ func newConfigManager(config config.Component) configManager {
 
 	var usedSite string
 	if profilingDDURL != "" {
-		usedSite = extractSite(profilingDDURL)
+		usedSite = configutils.ExtractSiteFromURL(profilingDDURL)
+		if usedSite == "" {
+			log.Warnf("Could not extract site from apm_config.profiling_dd_url %s, skipping endpoint", profilingDDURL)
+		}
 	} else if ddSite != "" {
 		usedSite = ddSite
 	}
@@ -60,7 +40,7 @@ func newConfigManager(config config.Component) configManager {
 	profilingAdditionalEndpoints := config.GetStringMapStringSlice("apm_config.profiling_additional_endpoints")
 	var endpoints []endpoint
 	for endpointURL, keys := range profilingAdditionalEndpoints {
-		site := extractSite(endpointURL)
+		site := configutils.ExtractSiteFromURL(endpointURL)
 		if site == "" {
 			log.Warnf("Could not extract site from URL %s, skipping endpoint", endpointURL)
 			continue

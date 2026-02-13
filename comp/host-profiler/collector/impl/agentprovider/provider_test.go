@@ -187,6 +187,21 @@ func TestProvider(t *testing.T) {
 			agentConfig: "provider/invalid-profiling-dd-url/agent.yaml",
 			shouldError: true,
 		},
+		{
+			name:         "duplicate-site",
+			agentConfig:  "provider/duplicate-site/agent.yaml",
+			expectedOTel: "provider/duplicate-site/otel.yaml",
+		},
+		{
+			name:         "infer-dc-from-url",
+			agentConfig:  "provider/infer-dc-from-url/agent.yaml",
+			expectedOTel: "provider/infer-dc-from-url/otel.yaml",
+		},
+		{
+			name:         "infer-dc-from-additional-ep",
+			agentConfig:  "provider/infer-dc-from-additional-ep/agent.yaml",
+			expectedOTel: "provider/infer-dc-from-additional-ep/otel.yaml",
+		},
 	}
 
 	for _, tt := range tests {
@@ -274,20 +289,3 @@ func TestProviderMethods(t *testing.T) {
 	require.NoError(t, provider.Shutdown(context.Background()))
 }
 
-func TestExtractSite(t *testing.T) {
-	tests := []struct {
-		url  string
-		want string
-	}{
-		{"https://intake.profile.datadoghq.com/api/v2/profile", "datadoghq.com"},
-		{"https://intake.profile.datadoghq.eu/api/v2/profile", "datadoghq.eu"},
-		{"https://intake.profile.us3.datadoghq.com/api/v2/profile", "datadoghq.com"},
-		{"not-a-valid-url", ""},
-		{"", ""},
-		{"file:///local/path", ""},
-	}
-
-	for _, tt := range tests {
-		require.Equal(t, tt.want, extractSite(tt.url))
-	}
-}

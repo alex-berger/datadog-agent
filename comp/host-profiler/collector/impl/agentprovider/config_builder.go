@@ -52,9 +52,13 @@ func buildExporters(conf confMap, agent configManager) []any {
 	}
 
 	profilesExporters := make([]any, 0, agent.endpointsTotalLength)
+	// Track exporter count per site to ensure unique names for duplicate sites
+	siteExporterCount := make(map[string]int)
 	for _, endpoint := range agent.endpoints {
-		for i, key := range endpoint.apiKeys {
-			exporterName := fmt.Sprintf(otlpHTTPNameFormat, endpoint.site, i)
+		for _, key := range endpoint.apiKeys {
+			index := siteExporterCount[endpoint.site]
+			siteExporterCount[endpoint.site]++
+			exporterName := fmt.Sprintf(otlpHTTPNameFormat, endpoint.site, index)
 			_ = converters.Set(exporters, exporterName, createOtlpHTTPFromEndpoint(endpoint.site, key))
 			profilesExporters = append(profilesExporters, exporterName)
 		}
