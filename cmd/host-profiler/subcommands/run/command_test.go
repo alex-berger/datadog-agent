@@ -19,7 +19,7 @@ import (
 func TestFxRunWithoutAgentCore(t *testing.T) {
 	fxutil.TestOneShotSubcommand(t,
 		MakeCommand(func() *globalparams.GlobalParams {
-			return &globalparams.GlobalParams{StandaloneConfigPath: "config_path"}
+			return &globalparams.GlobalParams{ConfFilePath: "config_path"}
 		}),
 		[]string{"run"},
 		run,
@@ -29,6 +29,6 @@ func TestFxRunWithoutAgentCore(t *testing.T) {
 func TestFxRunWithAgentCore(t *testing.T) {
 	// Use fxutil.TestOneShot as TestOneShotSubcommand would require valid datadog.yaml file, auth_token file and ipc_cert.pem.
 	fxutil.TestOneShot(t, func() {
-		runHostProfilerCommand(context.Background(), &cliParams{GlobalParams: &globalparams.GlobalParams{BundledConfigPath: "config_path"}})
+		runHostProfilerCommand(context.Background(), &cliParams{GlobalParams: &globalparams.GlobalParams{CoreConfPath: "config_path"}})
 	})
 }

@@ -67,14 +67,14 @@ func MakeCommand(globalConfGetter func() *globalparams.GlobalParams) []*cobra.Co
 }
 
 func validateFlags(params *globalparams.GlobalParams) error {
-	// Error if both --standalone and --bundled are set
-	if params.StandaloneConfigPath != "" && params.BundledConfigPath != "" {
-		return errors.New("cannot use both --standalone and --bundled flags together")
+	// Error if both --config and --core-config are set
+	if params.ConfFilePath != "" && params.CoreConfPath != "" {
+		return errors.New("cannot use both --config and --core-config flags together")
 	}
 
 	// Require at least one configuration source
-	if params.StandaloneConfigPath == "" && params.BundledConfigPath == "" {
-		return errors.New("must provide either --standalone or --bundled configuration")
+	if params.ConfFilePath == "" && params.CoreConfPath == "" {
+		return errors.New("must provide either --config or --core-config configuration")
 	}
 
 	return nil
@@ -91,12 +91,12 @@ func runHostProfilerCommand(ctx context.Context, cliParams *cliParams) error {
 		logging.DefaultFxLoggingOption(),
 	}
 
-	if cliParams.GlobalParams.BundledConfigPath != "" {
+	if cliParams.GlobalParams.CoreConfPath != "" {
 		opts = append(opts,
 			core.Bundle(),
 			remotehostnameimpl.Module(),
 			fx.Supply(core.BundleParams{
-				ConfigParams: config.NewAgentParams(cliParams.GlobalParams.BundledConfigPath),
+				ConfigParams: config.NewAgentParams(cliParams.GlobalParams.CoreConfPath),
 				LogParams:    log.ForDaemon(command.LoggerName, "log_file", setup.DefaultHostProfilerLogFile),
 			}),
 			fx.Provide(collectorimpl.NewExtraFactoriesWithAgentCore),

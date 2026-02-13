@@ -13,19 +13,20 @@ package globalparams
 // A pointer to this type is passed to SubcommandFactory's, but its contents
 // are not valid until Cobra calls the subcommand's Run or RunE function.
 type GlobalParams struct {
-	// StandaloneConfigPath holds the path to the standalone host profiler configuration file.
-	StandaloneConfigPath string
+	// ConfFilePath holds the path to the host profiler configuration file.
+	ConfFilePath string
 
-	// BundledConfigPath holds the path to the Datadog Agent config file for bundled mode.
-	BundledConfigPath string
+	// CoreConfPath holds the path to the Datadog Agent config file.
+	CoreConfPath string
 }
 
-// ConfigURI returns the appropriate configuration URI based on the mode.
-// In bundled mode (BundledConfigPath set), it returns "dd:" to use the agentprovider.
-// In standalone mode (StandaloneConfigPath set), it returns the file path.
+// ConfigURI returns the appropriate configuration URI based on the operational mode.
+// In bundled mode (CoreConfPath set), it returns "dd:" to use the agentprovider,
+// which generates OTEL config from the Agent configuration.
+// In standalone mode (ConfFilePath set), it returns the file path to the OTEL config.
 func (g *GlobalParams) ConfigURI() string {
-	if g.BundledConfigPath != "" {
+	if g.CoreConfPath != "" {
 		return "dd:"
 	}
-	return g.StandaloneConfigPath
+	return g.ConfFilePath
 }
