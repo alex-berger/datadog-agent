@@ -141,7 +141,6 @@ configure_make(
         ],
         "//conditions:default": [],
     }),
-    out_data_dirs = ["lib/pkgconfig"],
     # For whatever reason rules_foreign_cc does not respect
     # out_dll_dir parameter and tries to find Windows DLLs in
     # lib instead of bin. Technically, those are binaries,
@@ -265,12 +264,6 @@ pkg_files(
     target_compatible_with = ["@platforms//os:windows"],
 )
 
-filegroup(
-    name = "pkgconfig_dir",
-    srcs = [":openssl"],
-    output_group = "pkgconfig",
-)
-
 # "interface libs" are not exposed as output groups, therefore we use a more versatile rule to get these
 select_file(
     name = "libcrypto_import_lib",
@@ -294,12 +287,6 @@ pkg_files(
     ],
     prefix = "lib",
     target_compatible_with = ["@platforms//os:windows"],
-)
-
-pkg_files(
-    name = "openssl_pkgconfig",
-    srcs = [":pkgconfig_dir"],
-    prefix = "lib",
 )
 
 filegroup(
@@ -335,7 +322,6 @@ pkg_install(
         ],
         "//conditions:default": [
             ":openssl_bin_file",
-            ":openssl_pkgconfig",
         ],
     }),
 )
