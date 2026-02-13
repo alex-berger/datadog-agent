@@ -6,6 +6,7 @@
 use anyhow::{Context, Result};
 use log::warn;
 use phf::phf_set;
+use std::borrow::Cow;
 use std::env;
 use std::fs::File;
 use std::io::Read;
@@ -77,7 +78,7 @@ fn is_yaml_bool_true(section: &Yaml, key: &str) -> bool {
     matches!(section[key], Yaml::Boolean(true))
 }
 
-/// Returns true if the YAML document has any configuration that requires system-probe.
+/// Returns the YAML key that requires system-probe, if any.
 ///
 /// We check the `enabled` value of every system-probe feature, rather than
 /// key presence to avoid unnecessary fallback. This is needed because the Helm
@@ -89,42 +90,46 @@ fn is_yaml_bool_true(section: &Yaml, key: &str) -> bool {
 /// - `system_probe_config` and `event_monitoring_config`: checked for specific
 ///   sub-feature toggles (they don't have a top-level `enabled`).
 /// - Any other section: fallback unless it has `enabled: false`.
-fn has_non_discovery_yaml_keys(yaml_doc: &Option<Yaml>) -> bool {
+fn find_non_discovery_yaml_key<'a>(yaml_doc: &'a Option<Yaml>) -> Option<Cow<'a, str>> {
     match yaml_doc {
-        None => false,
+        None => None,
         Some(Yaml::Hash(map)) => {
             for (key, value) in map {
                 let Yaml::String(s) = key else {
-                    return true;
+                    return Some("<non-string key>".into());
                 };
                 match s.as_str() {
                     "discovery" | "log_level" => continue,
                     "event_monitoring_config" => {
-                        if is_yaml_bool_true(&value["process"], "enabled")
-                            || is_yaml_bool_true(&value["network_process"], "enabled")
-                        {
-                            return true;
+                        if is_yaml_bool_true(&value["process"], "enabled") {
+                            return Some("event_monitoring_config.process.enabled".into());
+                        }
+                        if is_yaml_bool_true(&value["network_process"], "enabled") {
+                            return Some("event_monitoring_config.network_process.enabled".into());
                         }
                     }
                     "system_probe_config" => {
-                        if is_yaml_bool_true(value, "enable_tcp_queue_length")
-                            || is_yaml_bool_true(value, "enable_oom_kill")
-                            || is_yaml_bool_true(&value["process_config"], "enabled")
-                        {
-                            return true;
+                        if is_yaml_bool_true(value, "enable_tcp_queue_length") {
+                            return Some("system_probe_config.enable_tcp_queue_length".into());
+                        }
+                        if is_yaml_bool_true(value, "enable_oom_kill") {
+                            return Some("system_probe_config.enable_oom_kill".into());
+                        }
+                        if is_yaml_bool_true(&value["process_config"], "enabled") {
+                            return Some("system_probe_config.process_config.enabled".into());
                         }
                     }
                     _ => {
                         if !matches!(value["enabled"], Yaml::Boolean(false)) {
-                            return true;
+                            return Some(Cow::Borrowed(s.as_str()));
                         }
                     }
                 }
             }
-            false
+            None
         }
-        Some(Yaml::BadValue) => false, // Empty or null document
-        _ => true, // Any non-hash YAML (array, string, etc.) counts as "other config"
+        Some(Yaml::BadValue) => None,        // Empty or null document
+        _ => Some("<non-hash YAML>".into()), // Any non-hash YAML (array, string, etc.) counts as "other config"
     }
 }
 
@@ -153,8 +158,8 @@ static NON_DISCOVERY_ENV_VARS: phf::Set<&'static str> = phf_set! {
   "DD_WINDOWS_CRASH_DETECTION_ENABLED", // Windows Crash Detection Module
 };
 
-/// Returns true if any non-discovery environment variable is set and not
-/// explicitly disabled.
+/// Returns the non-discovery environment variable that is set and not
+/// explicitly disabled, if any.
 ///
 /// We check the value of each env var rather than just its presence to avoid
 /// unnecessary fallback. This is needed because the Helm chart sets feature
@@ -172,9 +177,10 @@ static NON_DISCOVERY_ENV_VARS: phf::Set<&'static str> = phf_set! {
 ///
 /// So, until we have an exhaustive list of all system-probe environment
 /// variables we don't support, use the approach.
-fn has_non_discovery_env_vars() -> bool {
-    env::vars().any(|(key, _)| {
-        NON_DISCOVERY_ENV_VARS.contains(key.as_str()) && get_env_bool_option(&key) != Some(false)
+fn find_non_discovery_env_var() -> Option<String> {
+    env::vars().find_map(|(key, _)| {
+        (NON_DISCOVERY_ENV_VARS.contains(key.as_str()) && get_env_bool_option(&key) != Some(false))
+            .then_some(key)
     })
 }
 
@@ -272,10 +278,16 @@ pub fn determine_action(config: &Result<Option<Yaml>>) -> FallbackDecision {
         yaml_doc,
     );
 
-    if use_sd_agent.is_none_or(|enabled| !enabled)
-        || has_non_discovery_env_vars()
-        || has_non_discovery_yaml_keys(yaml_doc)
-    {
+    if use_sd_agent.is_none_or(|enabled| !enabled) {
+        warn!("Falling back to system-probe: sd-agent killswitch is not enabled");
+        return FallbackDecision::FallbackToSystemProbe;
+    }
+    if let Some(var) = find_non_discovery_env_var() {
+        warn!("Falling back to system-probe: env var {var} is set");
+        return FallbackDecision::FallbackToSystemProbe;
+    }
+    if let Some(key) = find_non_discovery_yaml_key(yaml_doc) {
+        warn!("Falling back to system-probe: YAML key {key} is active");
         return FallbackDecision::FallbackToSystemProbe;
     }
 
@@ -461,78 +473,77 @@ discovery:
     }
 
     #[test]
-    fn test_has_non_discovery_dd_env_vars_none() {
+    fn test_find_non_discovery_env_var_none() {
         // Clean environment - no DD_* vars
         temp_env::with_vars(Vec::<(String, Option<String>)>::new(), || {
-            let has_other = has_non_discovery_env_vars();
-            assert!(!has_other);
+            assert!(find_non_discovery_env_var().is_none());
         });
     }
 
     #[test]
-    fn test_has_non_discovery_dd_env_vars_with_dd_foo() {
+    fn test_find_non_discovery_env_var_with_dd_foo() {
         temp_env::with_var("DD_DYNAMIC_INSTRUMENTATION_ENABLED", Some("true"), || {
-            assert!(has_non_discovery_env_vars());
+            assert!(find_non_discovery_env_var().is_some());
         });
     }
 
     #[test]
-    fn test_has_non_discovery_dd_env_vars_discovery_only() {
+    fn test_find_non_discovery_env_var_discovery_only() {
         temp_env::with_var("DD_DISCOVERY_ENABLED", Some("true"), || {
             // DD_DISCOVERY_ENABLED alone should not count as "other" DD_* vars
-            assert!(!has_non_discovery_env_vars());
+            assert!(find_non_discovery_env_var().is_none());
         });
     }
 
     #[test]
-    fn test_has_non_discovery_env_vars_false_no_fallback() {
+    fn test_find_non_discovery_env_var_false_no_fallback() {
         temp_env::with_var("DD_NETWORK_CONFIG_ENABLED", Some("false"), || {
             assert!(
-                !has_non_discovery_env_vars(),
+                find_non_discovery_env_var().is_none(),
                 "Env var set to 'false' should not trigger fallback"
             );
         });
     }
 
     #[test]
-    fn test_has_non_discovery_env_vars_zero_no_fallback() {
+    fn test_find_non_discovery_env_var_zero_no_fallback() {
         temp_env::with_var("DD_NETWORK_CONFIG_ENABLED", Some("0"), || {
             assert!(
-                !has_non_discovery_env_vars(),
+                find_non_discovery_env_var().is_none(),
                 "Env var set to '0' should not trigger fallback"
             );
         });
     }
 
     #[test]
-    fn test_has_non_discovery_env_vars_non_boolean_triggers_fallback() {
+    fn test_find_non_discovery_env_var_non_boolean_triggers_fallback() {
         temp_env::with_var("DD_NETWORK_CONFIG_ENABLED", Some("maybe"), || {
             assert!(
-                has_non_discovery_env_vars(),
+                find_non_discovery_env_var().is_some(),
                 "Env var set to non-boolean value should trigger fallback as safety net"
             );
         });
     }
 
     #[test]
-    fn test_has_non_discovery_yaml_keys_empty() {
+    fn test_find_non_discovery_yaml_key_empty() {
         let yaml_doc: Option<Yaml> = None;
-        assert!(!has_non_discovery_yaml_keys(&yaml_doc));
+        assert!(find_non_discovery_yaml_key(&yaml_doc).is_none());
     }
 
     #[test]
-    fn test_has_non_discovery_yaml_keys_discovery_only() {
+    fn test_find_non_discovery_yaml_key_discovery_only() {
         let yaml = r#"
 discovery:
   enabled: true
 "#;
         let config_file = create_test_config(yaml);
         let yaml_doc = load_config(Some(config_file.path().to_path_buf())).unwrap();
-        assert!(!has_non_discovery_yaml_keys(&yaml_doc));
+        assert!(find_non_discovery_yaml_key(&yaml_doc).is_none());
     }
 
     #[test]
-    fn test_has_non_discovery_yaml_keys_with_other() {
+    fn test_find_non_discovery_yaml_key_with_other() {
         let yaml = r#"
 discovery:
   enabled: true
@@ -541,18 +552,18 @@ network_config:
 "#;
         let config_file = create_test_config(yaml);
         let yaml_doc = load_config(Some(config_file.path().to_path_buf())).unwrap();
-        assert!(has_non_discovery_yaml_keys(&yaml_doc));
+        assert!(find_non_discovery_yaml_key(&yaml_doc).is_some());
     }
 
     #[test]
-    fn test_has_non_discovery_yaml_keys_unknown() {
+    fn test_find_non_discovery_yaml_key_unknown() {
         let yaml = r#"
 unknown_key:
   enabled: true
 "#;
         let config_file = create_test_config(yaml);
         let yaml_doc = load_config(Some(config_file.path().to_path_buf())).unwrap();
-        assert!(has_non_discovery_yaml_keys(&yaml_doc));
+        assert!(find_non_discovery_yaml_key(&yaml_doc).is_some());
     }
 
     #[test]
@@ -566,7 +577,7 @@ system_probe_config:
         let config_file = create_test_config(yaml);
         let yaml_doc = load_config(Some(config_file.path().to_path_buf())).unwrap();
         assert!(
-            !has_non_discovery_yaml_keys(&yaml_doc),
+            find_non_discovery_yaml_key(&yaml_doc).is_none(),
             "Should allow system_probe_config with only sysprobe_socket"
         );
     }
@@ -583,7 +594,7 @@ system_probe_config:
         let config_file = create_test_config(yaml);
         let yaml_doc = load_config(Some(config_file.path().to_path_buf())).unwrap();
         assert!(
-            !has_non_discovery_yaml_keys(&yaml_doc),
+            find_non_discovery_yaml_key(&yaml_doc).is_none(),
             "Should allow system_probe_config with general settings (no tcp_queue_length/oom_kill)"
         );
     }
@@ -599,7 +610,7 @@ system_probe_config:
         let config_file = create_test_config(yaml);
         let yaml_doc = load_config(Some(config_file.path().to_path_buf())).unwrap();
         assert!(
-            !has_non_discovery_yaml_keys(&yaml_doc),
+            find_non_discovery_yaml_key(&yaml_doc).is_none(),
             "Should allow system_probe_config with general settings only"
         );
     }
@@ -614,7 +625,7 @@ system_probe_config:
         let config_file = create_test_config(yaml);
         let yaml_doc = load_config(Some(config_file.path().to_path_buf())).unwrap();
         assert!(
-            !has_non_discovery_yaml_keys(&yaml_doc),
+            find_non_discovery_yaml_key(&yaml_doc).is_none(),
             "Should allow empty system_probe_config"
         );
     }
