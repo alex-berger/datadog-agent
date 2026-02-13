@@ -41,7 +41,7 @@ var (
 
 // Resolver is used to store namespace handles
 type Resolver struct {
-	sync.Mutex
+	sync.RWMutex
 	state      atomic.Int64
 	tcResolver *tc.Resolver
 	client     statsd.ClientInterface
@@ -49,6 +49,9 @@ type Resolver struct {
 	manager    *manager.Manager
 
 	networkNamespaces *simplelru.LRU[uint32, *NetworkNamespace]
+	tcRequests        chan TcClassifierRequest
+	ctx               context.Context
+	wg                sync.WaitGroup
 }
 
 // NewResolver returns a new instance of Resolver
@@ -58,6 +61,7 @@ func NewResolver(config *config.Config, manager *manager.Manager, statsdClient s
 		config:     config,
 		manager:    manager,
 		tcResolver: tcResolver,
+		tcRequests: make(chan TcClassifierRequest, 16),
 	}
 
 	lru, err := simplelru.NewLRU(1024, func(_ uint32, value *NetworkNamespace) {
@@ -150,8 +154,8 @@ func (nr *Resolver) ResolveNetworkNamespace(nsID uint32) *NetworkNamespace {
 		return nil
 	}
 
-	nr.Lock()
-	defer nr.Unlock()
+	nr.RLock()
+	defer nr.RUnlock()
 
 	if ns, found := nr.networkNamespaces.Get(nsID); found {
 		return ns
@@ -257,8 +261,8 @@ func (nr *Resolver) SyncCache() bool {
 	return true
 }
 
-// QueueNetworkDevice adds the input device to the map of queued network devices. Once a handle for the network namespace
-// of the device is resolved, a new TC classifier will automatically be added to the device. The queue is cleaned up
+// QueueNetworkDevice adds the input Device to the map of queued network devices. Once a handle for the network namespace
+// of the Device is resolved, a new TC classifier will automatically be added to the Device. The queue is cleaned up
 // periodically if a namespace do not own any process.
 func (nr *Resolver) QueueNetworkDevice(device model.NetDevice) {
 	if !nr.config.NetworkEnabled {
@@ -287,6 +291,9 @@ func (nr *Resolver) Start(ctx context.Context) error {
 		return nil
 	}
 
+	nr.ctx = ctx
+	nr.startTcClassifierLoopGoroutine()
+
 	go nr.flushNamespaces(ctx)
 	return nil
 }
@@ -294,11 +301,11 @@ func (nr *Resolver) Start(ctx context.Context) error {
 func (nr *Resolver) manualFlushNamespaces() {
 	probesCount := nr.tcResolver.FlushInactiveProbes(nr.manager, nr.IsLazyDeletionInterface)
 
-	// There is a possible race condition if we lose all network device creations but do notice the new network
+	// There is a possible race condition if we lose all network Device creations but do notice the new network
 	// namespace: we will create a handle that will never be flushed by `nr.probe.flushInactiveNamespaces()`.
 	// To detect this race, compute the list of namespaces that are in cache, but for which we do not have any
-	// device. Defer a snapshot process for each of those namespaces, and delete them if the snapshot yields
-	// no new device.
+	// Device. Defer a snapshot process for each of those namespaces, and delete them if the snapshot yields
+	// no new Device.
 	nr.preventNetworkNamespaceDrift(probesCount)
 }
 
@@ -398,7 +405,7 @@ func (nr *Resolver) preventNetworkNamespaceDrift(probesCount map[uint32]int) {
 
 // SendStats sends metrics about the current state of the namespace resolver
 func (nr *Resolver) SendStats() error {
-	nr.Lock()
+	nr.RLock()
 
 	networkNamespacesCount := float64(nr.networkNamespaces.Len())
 
@@ -416,12 +423,11 @@ func (nr *Resolver) SendStats() error {
 		}
 	}
 
-	nr.Unlock()
+	nr.RUnlock()
 
 	if networkNamespacesCount > 0 {
 		_ = nr.client.Gauge(metrics.MetricNamespaceResolverNetNSHandle, networkNamespacesCount, []string{}, 1.0)
 	}
-
 	if queuedNetworkDevicesCount > 0 {
 		_ = nr.client.Gauge(metrics.MetricNamespaceResolverQueuedNetworkDevice, queuedNetworkDevicesCount, []string{}, 1.0)
 	}
@@ -433,6 +439,10 @@ func (nr *Resolver) SendStats() error {
 
 // Close closes this resolver and frees all the resources
 func (nr *Resolver) Close() {
+	close(nr.tcRequests)
+
+	nr.wg.Wait()
+
 	if nr.networkNamespaces != nil {
 		nr.Lock()
 		nr.networkNamespaces.Purge()
@@ -470,8 +480,8 @@ type NetworkNamespaceDump struct {
 }
 
 func (nr *Resolver) dump(params *api.DumpNetworkNamespaceParams) []NetworkNamespaceDump {
-	nr.Lock()
-	defer nr.Unlock()
+	nr.RLock()
+	defer nr.RUnlock()
 
 	var handle *os.File
 	var ntl *manager.NetlinkSocket

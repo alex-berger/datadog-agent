@@ -147,7 +147,7 @@ func (nn *NetworkNamespace) dequeueNetworkDevices(tcResolver *tc.Resolver, manag
 
 	for _, queuedDevice := range nn.networkDevicesQueue {
 		if err = tcResolver.SetupNewTCClassifierWithNetNSHandle(queuedDevice, handle, manager); err != nil {
-			seclog.Errorf("error setting up new tc classifier on queued device: %v", err)
+			seclog.Errorf("error setting up new tc classifier on queued Device: %v", err)
 		}
 	}
 	nn.flushNetworkDevicesQueue()
