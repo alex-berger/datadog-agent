@@ -154,8 +154,8 @@ func TestProvider(t *testing.T) {
 		},
 		{
 			name:         "multiple-keys-per-endpoint",
-			agentConfig:  "provider/multiple-keys-per-endpoint/agent.yaml",
-			expectedOTel: "provider/multiple-keys-per-endpoint/otel.yaml",
+			agentConfig:  "provider/multi-keys-per-ep/agent.yaml",
+			expectedOTel: "provider/multi-keys-per-ep/otel.yaml",
 		},
 		{
 			name:        "no-site",
@@ -174,13 +174,13 @@ func TestProvider(t *testing.T) {
 		},
 		{
 			name:         "profiling-dd-url-precedence",
-			agentConfig:  "provider/profiling-dd-url-precedence/agent.yaml",
-			expectedOTel: "provider/profiling-dd-url-precedence/otel.yaml",
+			agentConfig:  "provider/prof-dd-url-prec/agent.yaml",
+			expectedOTel: "provider/prof-dd-url-prec/otel.yaml",
 		},
 		{
 			name:         "invalid-additional-endpoint",
-			agentConfig:  "provider/invalid-additional-endpoint/agent.yaml",
-			expectedOTel: "provider/invalid-additional-endpoint/otel.yaml",
+			agentConfig:  "provider/invalid-add-ep/agent.yaml",
+			expectedOTel: "provider/invalid-add-ep/otel.yaml",
 		},
 		{
 			name:        "invalid-profiling-dd-url",
@@ -194,13 +194,13 @@ func TestProvider(t *testing.T) {
 		},
 		{
 			name:         "infer-dc-from-url",
-			agentConfig:  "provider/infer-dc-from-url/agent.yaml",
-			expectedOTel: "provider/infer-dc-from-url/otel.yaml",
+			agentConfig:  "provider/infer-dc-url/agent.yaml",
+			expectedOTel: "provider/infer-dc-url/otel.yaml",
 		},
 		{
 			name:         "infer-dc-from-additional-ep",
-			agentConfig:  "provider/infer-dc-from-additional-ep/agent.yaml",
-			expectedOTel: "provider/infer-dc-from-additional-ep/otel.yaml",
+			agentConfig:  "provider/infer-dc-add-ep/agent.yaml",
+			expectedOTel: "provider/infer-dc-add-ep/otel.yaml",
 		},
 	}
 
@@ -288,4 +288,3 @@ func TestProviderMethods(t *testing.T) {
 
 	require.NoError(t, provider.Shutdown(context.Background()))
 }
-
