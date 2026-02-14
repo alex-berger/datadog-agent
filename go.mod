@@ -998,8 +998,8 @@ require (
 	github.com/qri-io/jsonpointer v0.1.1
 	github.com/santhosh-tekuri/jsonschema/v5 v5.3.1
 	gitlab.com/gitlab-org/api/client-go v1.14.0
-	go.temporal.io/api v1.62.0
-	go.temporal.io/sdk v1.39.0
+	go.temporal.io/api v1.62.1
+	go.temporal.io/sdk v1.40.0
 )
 
 require (
