@@ -1937,7 +1937,12 @@ func (s *TracerSuite) TestShortWrite() {
 
 	sk, err := unix.Socket(syscall.AF_INET, syscall.SOCK_STREAM|syscall.SOCK_NONBLOCK, 0)
 	require.NoError(t, err)
-	defer syscall.Close(sk)
+	skOwnedByFile := false
+	defer func() {
+		if !skOwnedByFile {
+			syscall.Close(sk)
+		}
+	}()
 
 	err = unix.SetsockoptInt(sk, syscall.SOL_SOCKET, syscall.SO_SNDBUF, 5000)
 	require.NoError(t, err)
@@ -1992,13 +1997,18 @@ func (s *TracerSuite) TestShortWrite() {
 	require.True(t, done)
 
 	f := os.NewFile(uintptr(sk), "")
+	skOwnedByFile = true // f now manages the lifecycle of sk
 	c, err := net.FileConn(f)
 	require.NoError(t, err)
 	t.Cleanup(func() { c.Close() })
 
 	unix.Shutdown(sk, unix.SHUT_WR)
 	close(read)
-	unix.Close(sk)
+	// Close f through Go's interface to properly disarm its GC finalizer.
+	// Without this, f's finalizer would eventually call close(sk), potentially
+	// closing a reused fd in a subsequent test (causing "bad file descriptor"
+	// errors). Since net.FileConn already dup'd the fd, c remains valid.
+	f.Close()
 
 	require.EventuallyWithT(t, func(collect *assert.CollectT) {
 		conns, cleanup := getConnections(collect, tr)
